@@ -45,7 +45,8 @@ disagree about the SF of an `IMUL` or the OF of a multi-bit shift, and comparing
 an undefined bit compares nothing. With the masks right, native and
 `qemu-x86_64` agree exactly - and only then does a third answer mean something.
 
-It found four bugs in an afternoon, one of which was the cause:
+It found five bugs, one of which was the cause and one of which only exists in
+the WebAssembly build:
 
 - **`PSLLW/PSLLD/PSLLQ` ↔ `PSRAW/PSRAD`.** `0F 71..73`'s `/reg` is `/2` PSRL,
   `/4` PSRA, `/6` PSLL; four and six were swapped, so every `PSLLQ` was an
@@ -58,6 +59,14 @@ It found four bugs in an afternoon, one of which was the cause:
   destination register is still written, and a 32-bit write zeroes the upper
   half.
 - **`SHLD/SHRD`'s OF**, defined for a count of one and missing.
+- **`CVTPS2DQ`/`CVTTPS2DQ`/`CVTPD2DQ`/`CVTTPD2DQ` in the wasm build only.** The
+  conversion was a plain `static_cast<int32_t>(double)`, whose result is
+  undefined when the value does not fit or is a NaN. Compiled for x86 that cast
+  *becomes the instruction being emulated* and looks perfectly right; compiled
+  to WebAssembly it becomes a trapping or saturating truncate and quietly is
+  not. `to_int32_x86`/`to_int64_x86` now say what x86 means. Running isatest
+  under the wasm build is therefore a check worth keeping:
+  `node web/test_node.mjs isatest`.
 
 **The lesson worth keeping: build the oracle before hunting.** Two independent
 implementations that agree turn a search into a lookup.
@@ -111,8 +120,15 @@ does *not* have these changes.
    tool for that now. Note the reason the bits are off today: glibc's IFUNC
    reads them and switches `memcpy` to code that is not implemented.
 3. **The browser demo's synthesis path is unverified end to end** at the time of
-   writing - `web/test_page.mjs speak` was still running. Text analysis is
-   verified and fast.
+   writing - `web/test_page.mjs speak` was still running, and started before the
+   conversion fix above, so its output may not be trustworthy. Text analysis is
+   verified in a real browser, against both a local server and the deployed
+   Pages site (`node tools/browser_test.mjs [--url ...]`).
+6. **The guest needs `/tmp`.** Absent, `voicevox_open_jtalk_rc_use_user_dict`
+   fails with `USE_USER_DICT_ERROR` - Open JTalk compiles a user dictionary
+   through a temporary file. `sysroot/tmp/.keep` carries the directory, and
+   `make_sysroot.sh` and the browser worker both create it. Found by running
+   `apitest --no-audio` through the emulator, which is what that flag is for.
 4. **`voicevox_onnxruntime_init_once`** is stubbed: this build of CORE loads
    ONNX Runtime rather than linking it, so the header does not declare it.
 5. **Threads are avoided, not solved.** `cpu_num_threads = 1`,
