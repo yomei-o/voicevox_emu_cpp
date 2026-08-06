@@ -177,9 +177,21 @@ system_dirs = [d for d in ['/usr/local/cuda/lib64',
                            '/usr/local/cuda/targets/x86_64-linux/lib',
                            '/usr/lib/x86_64-linux-gnu'] if os.path.isdir(d)]
 
+# Whatever was already on the path stays on it.  Colab puts the *driver* -
+# libcuda.so.1, in /usr/lib64-nvidia - there, and replacing the variable rather
+# than adding to it hides it.  cudart then reports the driver version as 0 and
+# every call fails with error 35, which reads like a version mismatch and is
+# really "there is no driver here".
+existing = [d for d in os.environ.get('LD_LIBRARY_PATH', '').split(':') if d]
+driver_dirs = [d for d in ['/usr/lib64-nvidia', '/usr/lib/x86_64-linux-gnu'] if os.path.isdir(d)]
+
 # A cudart the driver accepts first, then cuDNN 8, then the system for the rest.
-LD = ':'.join(dict.fromkeys(cudart_dirs + cudnn_dirs + system_dirs + ['/content/vv']))
+LD = ':'.join(dict.fromkeys(cudart_dirs + cudnn_dirs + system_dirs + driver_dirs +
+                            existing + ['/content/vv']))
 os.environ['LD_LIBRARY_PATH'] = LD
+
+found_driver = next((d for d in LD.split(':') if os.path.exists(f'{d}/libcuda.so.1')), None)
+print('libcuda.so.1 (the driver):', found_driver or 'NOT FOUND - is a GPU attached?')
 
 print()
 for so in ['libcudart.so.12', 'libcublas.so.12', 'libcublasLt.so.12',
