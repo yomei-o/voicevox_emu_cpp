@@ -225,6 +225,54 @@ Two of the three open questions are now answered.
    exists; wiring it to a PLT is new work. And 377 launches is 377 round trips
    across the emulator's memory, which is the part that could still spoil it.
 
+## Could this make the browser demo bearable?
+
+That is the question the whole exercise is really for, and three of the four
+things it turns on are now measured.
+
+**How much of the work is arithmetic? Nearly all of it.** The CUDA provider
+hands every bit of its arithmetic across this boundary, so timing the shim
+answers it exactly (`VVSTUB_TIME=1`):
+
+| "ずんだもんなのだ" | |
+| --- | --- |
+| whole run | 4.97 s |
+| — synthesis | 3.71 s |
+| — — inside the shim: **the arithmetic** | **3.70 s** |
+| — — ONNX Runtime's own plumbing | 0.01 s |
+| everything else: model load, decrypt, session build, OpenJTalk | 1.27 s |
+
+So of a run, **99.7 % of the synthesis is arithmetic** that this design moves
+out of the interpreter, and what stays behind is the 1.27 s of setup. That is
+the ceiling, and it is a high one.
+
+**Is the download impossible? No, after `tools/slim_provider.sh`.** The provider
+is 440 MB and 419 MB of it is `.nv_fatbin` — compiled device code for all 4757
+kernels, of which the shim executes none. Zeroing those bytes in place keeps
+every offset in the file correct, and the provider still registers 4757 kernels,
+still launches 377, and still makes audio within 2 of 12988 of the T4:
+
+    440 MB  ->  9.3 MB gzipped
+
+**Does it fit in a tab? Not yet.** `Memory::map` allocates every page of a
+segment up front and the loader then writes the whole segment, so those 419 MB
+of zeros still cost 419 MB of guest pages. Lazy pages — record the range,
+allocate on first touch — would fix it, and would help every other large
+mapping too. That is a bounded change to the emulator core.
+
+**Would it be fast? Unknown, and this is the honest part.** The arithmetic would
+run as compiled WebAssembly rather than interpreted x86, which is the whole
+point. But the 1.27 s of setup stays emulated, and at the browser's ~6 M
+instructions a second that is minutes, not seconds. So the shape of the answer
+is: **from about 100 minutes to something on the order of a few** — an enormous
+improvement and still not instant. The error bar on that stays wide until the
+PLT hooking exists and it can be *measured* instead of estimated.
+
+And one more thing to weigh against it: the shim is competitive per core but it
+is single-threaded, where MLAS is not. Same utterance, this machine, eight
+cores: MLAS 1.1 s against the shim's 3.7 s. Per core the shim is ahead; on wall
+clock it is not, and a browser tab is where that gap is hardest to close.
+
 ## Where the line is
 
 Unlike a JIT — which speeds the emulator up without the weights ever being used
@@ -233,6 +281,11 @@ host memory, on purpose. Whether that reads as "the emulator provides a device"
 or as something the voice-model terms forbid is a judgement call, and it is the
 owner's to make. It is not a technical question and this document does not
 answer it.
+
+Shipping it in the **public demo page** is a further step again, and a larger
+one: there the decrypted weights would sit in a browser tab's linear memory,
+reachable by anything on the page, with a documented layout. That deserves its
+own decision rather than following from this one.
 
 Nothing here has been used to extract anything: the measurements above run a
 plain `.onnx` and a real utterance whose output is deliberately meaningless.
