@@ -75,17 +75,27 @@ implementations that agree turn a search into a lookup.
 
 All of it belongs upstream in `x86_emu_cpp`; none of it is voicevox-specific.
 
+`git diff 8e96b56 HEAD -- x86_emu_cpp/` is the whole of it: 8 files, +572/-61.
+
 | file | what |
 | --- | --- |
-| `src/sse.cpp` | the PSLL/PSRA fix; MIN/MAX; `RSQRTPS`/`RSQRTSS`/`RCPPS`/`RCPSS`; AES-NI and its `X86EMU_AES_COUNT` counter |
-| `src/cpu.cpp` | `SHLD/SHRD` zero-count write and OF; CPUID leaf 1 ECX bits 1 and 25 |
+| `src/sse.cpp` | **the PSLL/PSRA fix**; MIN/MAX ties and NaN; `RSQRTPS`/`RSQRTSS`/`RCPPS`/`RCPSS`; the x86 float-to-int conversions; **all of SSSE3 and SSE4.1** (plus `PCMPGTQ`); AES-NI and its `X86EMU_AES_COUNT` counter |
+| `src/cpu.h` | `to_int16_x86` / `to_int32_x86` / `to_int64_x86` |
+| `src/cpu.cpp` | `SHLD/SHRD` zero-count write and OF; CPUID leaf 1 ECX bits 1 and 25; the prefix decoder as a switch; `census()` resolved once |
+| `src/x87.cpp` | FIST/FISTP through the conversion helpers |
 | `src/memory.{h,cpp}` | the direct-mapped page cache in `host_ptr` |
 | `src/emulator.cpp` | flush the host's stdout after a guest write |
-| `src/files.cpp` | the same for a child's redirected stdout; `statx` support lives in `syscalls*` |
-| `web/wasm_api.cpp` | `emu_set_sysroot` |
+| `src/files.cpp` | the same for a child's redirected stdout |
+| `web/wasm_api.cpp` | `emu_set_sysroot` (this repo's `web/` copy) |
+
+`statx` (syscall 332) landed in `syscalls.cpp` / `syscalls_files.inc` before this
+project's second session and is already in the vendored copy.
 
 Regression checks that must stay green: the sibling checkout's
-`tests/run_tests.sh` (7/7 here), and `isatest` against `qemu_ref.txt` (240/240).
+`tests/run_tests.sh` (7/7 here), and `sh tools/check_isa.sh` plus
+`sh tools/check_isa.sh wasm` (303/303 each). `src/isatest.c`, `src/memtest.c`
+and `tools/check_isa.sh` belong upstream too - they are emulator tests, not
+voicevox ones.
 
 **Merge policy.** Work on the emulator here, merge back upstream in one
 deliberate step. `setup.sh` prefers a built `../x86_emu_cpp/x86emu.exe` when a
