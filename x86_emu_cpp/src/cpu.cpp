@@ -39,10 +39,12 @@ struct Census {
     }
 };
 
-Census* census() {
+// Resolved once, at load.  A function-local static costs a guarded load on
+// every instruction executed, and Cpu::step is the hottest path there is.
+Census* const g_census = [] {
     static Census c;
     return c.out ? &c : nullptr;
-}
+}();
 
 uint64_t mask_of(int size) {
     return size == 8 ? ~0ull : ((1ull << (size * 8)) - 1);
@@ -982,7 +984,7 @@ void Cpu::step() {
 
     uint64_t start = rip;
     g_watch_rip = start;
-    if (Census* c = census()) c->record(start);
+    if (g_census) g_census->record(start);
     if (!history_.empty()) {
         history_[history_pos_] = start;
         history_pos_ = (history_pos_ + 1) % history_.size();
@@ -992,39 +994,43 @@ void Cpu::step() {
 
     // Prefix bytes.  Segment overrides other than fs:/gs: are accepted and
     // ignored, because the loaders set up a flat address space.
-    for (;;) {
+    //
+    // A switch, not a chain of comparisons: this runs for every instruction the
+    // guest executes, and the chain it replaces tested nine other things before
+    // reaching REX - which is the commonest prefix there is in 64-bit code, and
+    // "no prefix at all" was the tenth.
+    bool more_prefixes = true;
+    while (more_prefixes) {
         uint8_t b = mem_.read8(rip);
-        if (b == 0x66) {
-            pfx_.opsize16 = true;
-        } else if (b == 0x67) {
-            pfx_.addr_override = true;
-        } else if (b == 0xF0) {
-            pfx_.lock = true;
-        } else if (b == 0xF2) {
-            pfx_.repne = true;
-        } else if (b == 0xF3) {
-            pfx_.rep = true;
-        } else if (b == 0x64) {
-            pfx_.seg_base = fs_base;
-            pfx_.seg_override = true;
-        } else if (b == 0x65) {
-            pfx_.seg_base = gs_base;
-            pfx_.seg_override = true;
-        } else if (b == 0x2E || b == 0x36 || b == 0x3E || b == 0x26) {
+        switch (b) {
+            case 0x40: case 0x41: case 0x42: case 0x43:
+            case 0x44: case 0x45: case 0x46: case 0x47:
+            case 0x48: case 0x49: case 0x4A: case 0x4B:
+            case 0x4C: case 0x4D: case 0x4E: case 0x4F:
+                // In 32-bit mode these are INC/DEC, not prefixes.
+                if (!is64()) {
+                    more_prefixes = false;
+                    break;
+                }
+                pfx_.has_rex = true;
+                pfx_.rex_w = (b & 8) != 0;
+                pfx_.rex_r = (b & 4) != 0;
+                pfx_.rex_x = (b & 2) != 0;
+                pfx_.rex_b = (b & 1) != 0;
+                ++rip;
+                more_prefixes = false;  // REX must be the last prefix
+                break;
+            case 0x66: pfx_.opsize16 = true; ++rip; break;
+            case 0x67: pfx_.addr_override = true; ++rip; break;
+            case 0xF0: pfx_.lock = true; ++rip; break;
+            case 0xF2: pfx_.repne = true; ++rip; break;
+            case 0xF3: pfx_.rep = true; ++rip; break;
+            case 0x64: pfx_.seg_base = fs_base; pfx_.seg_override = true; ++rip; break;
+            case 0x65: pfx_.seg_base = gs_base; pfx_.seg_override = true; ++rip; break;
             // cs:/ss:/ds:/es: - all zero based here
-        } else if (is64() && b >= 0x40 && b <= 0x4F) {
-            // REX must be the last prefix before the opcode.
-            pfx_.has_rex = true;
-            pfx_.rex_w = (b & 8) != 0;
-            pfx_.rex_r = (b & 4) != 0;
-            pfx_.rex_x = (b & 2) != 0;
-            pfx_.rex_b = (b & 1) != 0;
-            ++rip;
-            break;
-        } else {
-            break;
+            case 0x2E: case 0x36: case 0x3E: case 0x26: ++rip; break;
+            default: more_prefixes = false; break;
         }
-        ++rip;
     }
 
     opsize_ = pfx_.rex_w ? 8 : (pfx_.opsize16 ? 2 : 4);
