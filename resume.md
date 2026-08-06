@@ -1,294 +1,139 @@
 # Where this is, and what to do next
 
-Working notes. The README says what this *is*; this says what is unfinished and
-what is known about it. Written 2026-08-06.
-
-## What changed on 2026-08-06, second session: a reference appeared
-
-Work moved to an **x86-64 Windows machine with WSL2 Ubuntu 22.04**, which the
-notes below (written on ARM64 Windows, no Linux anywhere) did not have. Three
-things follow, and together they turn the open problem from a hunt into a diff.
-
-- **The guest works natively.** Built with WSL's gcc and run on Linux directly:
-  load 0.6 s, tts 1.5 s, a 69676-byte WAV. The model, the runtime and the API
-  sequence are sound on *this* machine too, not only on the old one's Windows
-  control.
-- **The guest works under `qemu-x86_64`** — same binary, same committed Debian
-  sysroot, `qemu-x86_64 -L sysroot sysroot/opt/vv/tts ...`: load 6.4 s, tts
-  517 s, the same WAV. So an emulator *can* do this, and `tools/qemu-diff/` now
-  has a reference it can actually produce.
-- **`x86emu` fails identically to before**, so nothing about the old machine
-  was involved.
-
-Guests no longer need clang and a cross-sysroot: WSL's gcc builds them natively
-(`gcc -O2 -o tts tts.c -L. -lvoicevox_core -Wl,-rpath,/opt/vv`). `build.sh` is
-still the portable path.
-
-### Two hypotheses died, cheaply
-
-**AES-NI is not involved at all.** `sse.cpp` now counts AES-NI executions and
-prints them at exit under `X86EMU_AES_COUNT=1`. Across the whole failing run:
-
-    [aes] aesimc=0 aesenc=0 aesenclast=0 aesdec=0 aesdeclast=0 aeskeygenassist=0
-
-Not one. The decrypt does not use AES-NI here, which also explains why adding
-it changed nothing — and qemu, whose default CPU has no AES bit either, decrypts
-the model fine. The AES-NI work stays because it is correct and tested, but it
-is not on this path.
-
-**The allocator is not corrupting the model.** `src/memtest.c` builds the same
-shape of buffer the model is read into — 64 KB grown by `realloc` to 64 MB,
-which above `mmap_threshold` makes every step the mremap-then-fall-back path —
-plus a flat 58 MB allocation, 64 concurrent mmap chunks freed out of order, and
-the model file itself read into a realloc-grown buffer and checksummed. Under
-the emulator all of it passes, and the realloc-grown copy of `0.vvm` hashes to
-`fbd5370b3d46e74d`, the same as the file. So mmap/munmap/copy on a 58 MB region
-is not dropping or duplicating anything.
-
-### Which leaves a wrong instruction, and now there is an oracle for it
-
-Control flow and I/O are ruled out; the bytes going in are right; the allocator
-is right. What is left is that some instruction computes the wrong answer — the
-same shape of bug as the `MOVHLPS` one that `x86_emu_cpp`'s notes record. Two
-routes, both now open:
-
-1. `tools/qemu-diff/` as designed, with `qemu-x86_64` as the reference.
-2. A differential instruction test — run the same instructions under qemu and
-   under `x86emu` and compare. Cheaper than a multi-gigabyte trace and it
-   pinpoints the opcode rather than the address.
+Working notes. The README says what this *is*; this says what is known about it
+and what is unfinished. Rewritten 2026-08-06 after the open problem closed.
 
 ## Start here
 
-    sh setup.sh        # unpack, build the emulator, build the guests
-    sh run_probe.sh    # ~10 s, should end "PROBE OK"
-    sh run_tts.sh      # gets to load_voice_model and fails - that is the open problem
+    sh setup.sh          # unpack, build the emulator, build the guests
+    sh run_probe.sh      # ~10 s, ends "PROBE OK"
+    sh build_api.sh      # guest/vvagent and voicevox_core.dll
+    node web/test_page.mjs   # the browser path, text analysis, ~1 s
 
 A clone is self-contained: the runtime, the core, the voice model, the
-dictionary and a Debian sysroot are all committed, and `setup.sh` downloads
-nothing. All it needs is a clang with `ld.lld` beside it (LLVM 19 here; set
-`CLANG=` if it is elsewhere) and a C++17 compiler for the emulator. No Linux
-host: this was all done on **ARM64 Windows**, where even the x64 tooling is
-running under Windows' own emulation.
+dictionary and a Debian sysroot are all committed and `setup.sh` downloads
+nothing.
 
-`make_sysroot.sh` and `fetch_models.sh` are kept for reproducing or changing
-the payload — a different voice model is `VVM=5.vvm sh fetch_models.sh` — and
-are not part of an ordinary clone.
+## What works
 
-## The one open problem
+- **The model decrypts and the pipeline produces audio.** `vvsay.exe` →
+  `voicevox_core.dll` → `x86emu` → the official `libvoicevox_core.so`, a 25132
+  byte WAV. Model load 498 s, inference 2498 s for 0.52 s of audio.
+- **The audio is the real thing.** Against a native run of the same text the
+  largest sample difference is 3 against a peak of 3912 (0.077 %), rms 0.0078 %.
+  `tools/wavcmp.mjs` does the comparison. It is not bit-identical and cannot be:
+  `RSQRTPS`/`RCPPS` are *approximate* by definition, hardware answers them to
+  about twelve bits and this emulator computes them exactly.
+- **The API is complete.** All 63 functions of `voicevox_core.h`. `apitest.c`
+  built against the real library and against this one prints the same 45 checks
+  and the same values, differing only in a random UUID.
+- **The browser build runs.** `probe` and text analysis both work under
+  WebAssembly; `web/test_page.mjs` rehearses the page's exact path in node.
 
-**The encrypted model does not decrypt inside the emulator**, and everything
-around it does.
+## How the decrypt was found, and why it matters for next time
 
-```
-step  voicevox_onnxruntime_load_once            ... 3.0 s
-step  voicevox_open_jtalk_rc_new                ... 1.0 s   (100 MB sys.dic)
-step  voicevox_synthesizer_new                  ... 0.0 s
-step  checksum the model file as the guest sees it
-      58214379 bytes, fnv1a fbd5370b3d46e74d    ... 14.0 s
-step  voicevox_voice_model_file_open            ... 0.0 s
-step  voicevox_synthesizer_load_voice_model
-FAIL  load_voice_model: 27 モデルデータを読むことができませんでした
-      Caused by: Failed to load model because protobuf parsing failed.
-```
+Four controls had already ruled out the model, the runtime, the API sequence,
+the file path, ORT's parser and anything I/O shaped. AES-NI was implemented on
+suspicion and a counter later showed it never executes. `memtest.c` ruled out
+the allocator. What was left was "some instruction computes the wrong answer",
+and the way to find *which* was not to diff a multi-gigabyte trace.
 
-Four controls have been run, and between them they corner it:
+`src/isatest.c` runs 240 groups of instructions over operands chosen to hit the
+edges and folds every result and every architecturally **defined** flag into a
+checksum. The mask per group is the point: a real CPU and qemu genuinely
+disagree about the SF of an `IMUL` or the OF of a multi-bit shift, and comparing
+an undefined bit compares nothing. With the masks right, native and
+`qemu-x86_64` agree exactly - and only then does a third answer mean something.
 
-| control | result | what it rules out |
-| --- | --- | --- |
-| the same `tts.c` built for Windows, run natively | **works** — load 4.0 s, tts 2.4 s, real audio | the model, the runtime, the API sequence |
-| the guest's own FNV-1a of `0.vvm` vs the host's | **identical**, `fbd5370b3d46e74d` | the emulated file path |
-| a plain `predict_duration.onnx` through the *emulated* ORT | **`CreateSession` succeeds**, inputs `phoneme_list`/`speaker_id`, output `phoneme_length` | ORT's protobuf parser, graph builder, session init |
-| syscall trace across the failing load | four `clock_gettime`, nothing else | anything I/O shaped |
+It found four bugs in an afternoon, one of which was the cause:
 
-So: the bytes arriving are right, ORT is healthy, and the failure is **specific
-to the `vv_bin` path and is pure computation**.
+- **`PSLLW/PSLLD/PSLLQ` ↔ `PSRAW/PSRAD`.** `0F 71..73`'s `/reg` is `/2` PSRL,
+  `/4` PSRA, `/6` PSLL; four and six were swapped, so every `PSLLQ` was an
+  arithmetic shift right. Compilers barely emit these. Hand-written SIMD - a
+  cipher, a hash - is made of them.
+- **`MINPS/MAXPS/MINPD/MAXPD`.** `SRC1 < SRC2 ? SRC1 : SRC2`, exactly; the
+  `else` carries the NaN case *and* the tie, which is how `MINPD` tells `+0.0`
+  from `-0.0`.
+- **`SHLD/SHRD` with a count of zero.** No shift and no flag change, but the
+  destination register is still written, and a 32-bit write zeroes the upper
+  half.
+- **`SHLD/SHRD`'s OF**, defined for a count of one and missing.
 
-### What has already been tried
+**The lesson worth keeping: build the oracle before hunting.** Two independent
+implementations that agree turn a search into a lookup.
 
-**AES-NI, implemented and then ruled out.** Disassembling the runtime shows
-144 `aesenc`, 16 `aesenclast`, 10 `aeskeygenassist`, 9 `aesimc` — so there is
-AES in there, and the emulator had none. The theory was that a crypto library
-finding no AES bit in CPUID declines to transform the data rather than falling
-back to software, which would produce exactly this error.
+## The emulator changes made here
 
-Both halves are now in `x86_emu_cpp` and both are verified:
+All of it belongs upstream in `x86_emu_cpp`; none of it is voicevox-specific.
 
-- `src/sse.cpp` implements AESENC/AESENCLAST/AESDEC/AESDECLAST/AESIMC/
-  AESKEYGENASSIST and PCLMULQDQ. `tests/aes/aesni.c` checks them against the
-  FIPS-197 vectors — encrypt, decrypt round trip, and a carry-less square —
-  and prints `AES OK`.
-- `src/cpu.cpp` CPUID leaf 1 now sets ECX bits 1 and 25. Verified from inside
-  the guest: `AES=1 PCLMUL=1`, with SSSE3/SSE4/AVX still 0 (deliberately —
-  glibc's IFUNC reads those and would switch memcpy to code that is not here).
+| file | what |
+| --- | --- |
+| `src/sse.cpp` | the PSLL/PSRA fix; MIN/MAX; `RSQRTPS`/`RSQRTSS`/`RCPPS`/`RCPSS`; AES-NI and its `X86EMU_AES_COUNT` counter |
+| `src/cpu.cpp` | `SHLD/SHRD` zero-count write and OF; CPUID leaf 1 ECX bits 1 and 25 |
+| `src/memory.{h,cpp}` | the direct-mapped page cache in `host_ptr` |
+| `src/emulator.cpp` | flush the host's stdout after a guest write |
+| `src/files.cpp` | the same for a child's redirected stdout; `statx` support lives in `syscalls*` |
+| `web/wasm_api.cpp` | `emu_set_sysroot` |
 
-**It changed nothing.** Same failure, byte for byte. So either the decrypt
-path never consults the AES bit, or it is never reached.
+Regression checks that must stay green: the sibling checkout's
+`tests/run_tests.sh` (7/7 here), and `isatest` against `qemu_ref.txt` (240/240).
 
-### Where to look next, roughly in order
+**Merge policy.** Work on the emulator here, merge back upstream in one
+deliberate step. `setup.sh` prefers a built `../x86_emu_cpp/x86emu.exe` when a
+sibling checkout exists, so **delete the sibling binary or set `EMU=`** while
+working here, or there is no telling which one ran. The sibling on this machine
+does *not* have these changes.
 
-1. **Find out whether an AES instruction executes at all.** This is the cheapest
-   remaining fact and it splits the problem in half. Add a one-shot
-   `fprintf(stderr, ...)` on the first AES opcode in `sse.cpp` (or an env-gated
-   counter) and run `run_tts.sh`. If AES never fires, the decrypt is not
-   running; if it fires, the decrypt is running and something after it is wrong.
-2. **`RDTSC`.** `cpu.cpp` returns `instructions_executed` as the timestamp
-   counter. Code that guards a secret sometimes times itself, and an
-   interpreter's timings are absurd. Making RDTSC track a real clock is easy
-   and would settle it.
-3. **`CPUID` beyond leaf 1.** The emulator reports max basic leaf **1** and
-   answers zero for everything else — including leaf 7, leaf 0xD (XSAVE) and
-   the cache leaves. Real code sometimes treats "leaf missing" differently
-   from "feature absent", and `xgetbv` is worth checking for too.
-4. **The 57 seconds.** The failing load takes ~57 s emulated (~1 G
-   instructions) against 4 s native. That is a lot of work to do before giving
-   up, which argues the decrypt *is* running and producing wrong bytes rather
-   than being skipped. Worth pinning down with (1).
-5. If it comes to it, the honest fallback is the **Windows DLLs**, which are
-   known to work natively on this machine. 23 imports are missing rather than
-   0, but the failure mode would at least be different.
+## What is unfinished
 
-### Where the line is
-
-Running the runtime is its intended use. Reading a decrypted model back out of
-guest memory is not, and the voice-model terms — separate from CORE's MIT
-licence — forbid it. Diagnosing *which instructions the emulator must
-implement* is emulator bring-up and is fine; stepping into the decryption to
-learn what it does is not. Everything above stays on the first side of that.
-
-## Fixed on the way here (both in `x86_emu_cpp`)
-
-**`statx`, syscall 332** — this one is worth remembering. `synthesizer_new`
-died reading address zero:
-
-```
-[sys] unimplemented syscall 332
-[sys] 332(ffffff9c,7fffffefdfb8,100,fff,...) = -38    statx -> ENOSYS
-[sys] 262(ffffff9c,7fffffefdfb8,...)         = -2     fstatat fallback
-[sys] unimplemented syscall 332
-[sys] 332(0,0,0,fff,0,1)                     = -38    the probe, with NULLs
-x86emu: unmapped memory read at 0x0000000000000000
-```
-
-Rust's standard library decides whether `statx` exists by **calling it with
-NULL pointers** and reading errno: ENOSYS or EPERM means "fall back to
-`fstat`", anything else means present. A real kernel says EFAULT. Answering
-ENOSYS sent glibc down its generic fallback, which called `fstatat` with a
-NULL pathname, which the emulator handed to `read_cstring`.
-
-The lesson generalises: **"not implemented" is not a neutral answer.** A caller
-that handles ENOSYS takes a *different* path, and that path can be worse than
-the one you declined to support.
-
-`syscalls.cpp` maps 332 (and i386's 383); `syscalls_files.inc` fills a real
-`struct statx` and both `Statx` and `Newfstatat` now return EFAULT for a null
-pathname or buffer. `tests/run_tests.sh` still passes 45/45.
-
-**AES-NI and PCLMULQDQ** — above. They did not fix the problem but they are
-correct, tested, and the emulator is better for having them.
-
-## Still unimplemented, seen in the trace but harmless so far
-
-- **syscall 25, `mremap`** — glibc's `realloc` tries it on the 58 MB model
-  buffer, gets ENOSYS, and correctly falls back to mmap + copy + munmap (you
-  can see all three in the trace). Worth implementing anyway; see the `statx`
-  lesson.
-- **syscall 99, `sysinfo`** — once, at startup.
-- `/etc/localtime` is absent, so the log timestamps come out as UTC. Harmless.
-
-## Speed, when it does start working
-
-Measured here: the emulator retires **~17 M instructions/s** (500 M in 29.9 s),
-and CPython's interpreter loop runs **~88× slower** than native. From
-`voicevox_core_cpp`'s own figure — HiFi-GAN decode at 2.5 s for 1.05 s of audio
-with Eigen AVX2 on four cores — an emulated single-threaded SSE2 run works out
-at roughly **half an hour per second of audio**.
-
-Two things bend that, in opposite directions:
-
-- This host is **ARM64 Windows under QEMU**, so `x86emu.exe` is itself being
-  emulated. On real x86-64 the 17 MIPS should be several times higher. The 88×
-  *ratio* is fair — both sides pay the same tax — but the absolute seconds are
-  pessimistic.
-- `Memory::host_ptr` does an `unordered_map` lookup on **every guest memory
-  access**, with no TLB. A 1 GB working set is a quarter-million pages in a
-  hash table. A one-entry last-page cache is the obvious first move and helps
-  every guest, not only this one.
-
-Seconds rather than minutes needs a JIT, which is a different project.
-
-## Why this shape
-
-**Linux guests, not Windows.** The Windows surface looked nearly done — of 689
-imports across the two DLLs, dropping `MSVCP140`/`VCRUNTIME140` (loaded for
-real) leaves 263 symbols with only 23 unhooked. The Linux `.so`s won anyway:
-the contract is the syscall ABI rather than an open-ended Win32 surface that
-`GetProcAddress` can extend at runtime, there is no VS redistributable to find,
-and the Rust core's Windows-only demands (`ProcessPrng`, `oleaut32`, `dxgi`,
-`WaitOnAddress`) all evaporate. The clincher was that `x86_emu_cpp` had already
-done glibc's `ld.so` — the ISA gate, IFUNC, `MAP_FIXED` semantics — so `probe`
-passed with **no emulator changes at all**.
-
-**x86 and not `aarch64_emu_cpp`.** Considered seriously. Against it: its Linux
-side is musl-only while ORT's arm64 build is glibc-linked, and its SIMD is
-scalar FP plus a subset of vector ops — no `FMLA`/`FMUL` vector forms, which is
-precisely what MLAS is made of. That is a much larger hole than the two things
-x86 needed. Revisit if NEON gets filled in; the macOS/dyld work there is
-genuinely attractive.
-
-**Threads are avoided, not solved.** `cpu_num_threads = 1`, `ORT_SEQUENTIAL`,
-`allow_spinning=0` — the emulator schedules guest threads cooperatively, so a
-spinning ORT thread pool would never yield. No `clone` has appeared in any
-trace, so the assumption holds. If one ever does, glibc's NPTL on the dynamic
-path is untested (x86_emu_cpp's own notes say so) and would land on the
-critical path.
+1. **Speed.** This is the whole story now. The interpreter retires tens of
+   millions of instructions a second; ORT wants billions. The page cache in
+   `host_ptr` bought about 25 % on a memory-bound guest. The next honest step is
+   a JIT, which is a different project. Cheaper things that might still be worth
+   measuring: an instruction-fetch cursor so decoding does not re-resolve the
+   code page per byte, and `census()` becoming a plain global rather than a
+   function-local static checked on every instruction.
+2. **CPUID says SSE2 only**, so ORT takes its slowest kernels. Advertising
+   SSSE3/SSE4/AVX2 would cut the instruction count a great deal, but every one
+   of those instructions then has to be right - and `isatest.c` is exactly the
+   tool for that now. Note the reason the bits are off today: glibc's IFUNC
+   reads them and switches `memcpy` to code that is not implemented.
+3. **The browser demo's synthesis path is unverified end to end** at the time of
+   writing - `web/test_page.mjs speak` was still running. Text analysis is
+   verified and fast.
+4. **`voicevox_onnxruntime_init_once`** is stubbed: this build of CORE loads
+   ONNX Runtime rather than linking it, so the header does not declare it.
+5. **Threads are avoided, not solved.** `cpu_num_threads = 1`,
+   `ORT_SEQUENTIAL`, `allow_spinning=0`. No `clone` has appeared in any trace.
 
 ## Things that cost time, so they are written down
 
-- **MSYS rewrites guest paths.** `-Wl,-rpath,/opt/vv` became
-  `RUNPATH C:/Program Files/Git/opt/vv`, and `/opt/vv/probe` on the command
-  line became a host path. `MSYS2_ARG_CONV_EXCL='*'` and `MSYS_NO_PATHCONV=1`
-  on both the compiler and the emulator; the run scripts set them.
-- **The program argument is a host path, the guest's arguments are not.**
-  `x86emu --sysroot sysroot sysroot/opt/vv/tts /opt/vv/0.vvm`.
-- **Debian does not ship the SONAME symlinks** — ldconfig makes them at install
-  time — and Windows cannot create the symlinks that *are* in the archive.
+- **MSYS rewrites guest paths.** `/opt/vv/x` on a command line becomes
+  `C:/Program Files/Git/opt/vv/x` - which is what "cannot open shared object
+  file" meant the first time the API was run from git-bash. Set
+  `MSYS2_ARG_CONV_EXCL='*'` and `MSYS_NO_PATHCONV=1` for the compiler, the
+  emulator *and* any host program taking guest paths.
+- **The emulator's own stdout was block-buffered.** A guest that answers on
+  stdout and a host that waits for the answer deadlocked through a pipe, and a
+  long run's progress was invisible through a redirect. Both were the same
+  missing `fflush`, now in `Emulator::host_write`.
+- **Non-ASCII on a command line is not worth the encoding risk.** `vvsay` reads
+  its text from a file for this reason; in the browser argv is exact and the
+  text goes straight through.
+- **Debian does not ship the SONAME symlinks** - ldconfig makes them at install
+  time - and Windows cannot create the ones that *are* in the archive.
   `make_sysroot.sh` materialises both as copies. A dangling one presents as
   "cannot open shared object file: Invalid argument" on a file that is there.
-- **Redirecting the emulator's stdout hides progress.** The guest's `fflush`
-  flushes the guest; the emulator's own stdout is block-buffered into the file.
-  Watch long runs on a terminal.
-- Non-ASCII on the command line is not worth the encoding risk; `tts.c` has the
-  default text compiled in as UTF-8.
+- **`*.txt` is `eol=lf` in `.gitattributes`** because `qemu_ref.txt` is diffed
+  against output the emulator writes with LF.
+- **`nativeemu.sh`** stands in for the emulator on Linux x86-64 and turns an API
+  round trip from minutes into milliseconds. Debugging 63 entry points any other
+  way is not practical.
 
-## The vendored emulator, and the merge-back policy
+## Where the line is
 
-`x86_emu_cpp/` here is a copy of the sibling project, carrying the `statx` and
-AES-NI changes.
-
-**Work on the emulator here. Merge it back upstream at the end, once the whole
-thing works.** Chasing the decrypt is going to mean several rounds of
-instrumenting the interpreter, and most of that instrumentation will be thrown
-away; upstreaming it round by round would put churn into `x86_emu_cpp` for no
-benefit. So this copy is the working tree for now, and the merge back is a
-single deliberate step after `run_tts.sh` produces audio.
-
-None of the changes are voicevox-specific — `statx` and AES-NI are plain gaps
-in an x86-64 emulator, and whatever the decrypt turns out to need will be too —
-so all of it belongs upstream eventually.
-
-When merging back:
-
-- `src/cpu.cpp` — CPUID leaf 1 ECX bits 1 and 25
-- `src/sse.cpp` — the AES-NI helpers and the `0F 38 DB..DF` / `0F 3A DF` /
-  `0F 3A 44` decode
-- `src/syscalls.cpp` — `Sys::Statx`, syscall 332 and i386 383
-- `src/syscalls_files.inc` — `write_statx`, the `Statx` case, the EFAULT guard
-  in `Newfstatat`
-- `tests/aes/aesni.c` — new, and worth wiring into `tests/run_tests.sh`
-
-`setup.sh` prefers a built `../x86_emu_cpp/x86emu.exe` when a sibling checkout
-exists, which on the development machine means **the sibling is what actually
-runs**. Keep the two in step while working, or delete the sibling binary so
-the vendored one is used and there is no doubt about which is being tested.
-The sibling checkout at `C:\prog\claude\x86_emu_cpp` currently holds the same
-changes, uncommitted.
+Running the runtime is its intended use. Reading a decrypted model back out of
+guest memory is not, and the voice-model terms - separate from CORE's MIT
+licence - forbid it. Diagnosing *which instruction an emulator computes wrongly*
+is emulator bring-up and is fine; `isatest.c` did it without looking at the
+model at all. The emulator's `--dump` is pointed at nothing here for a reason.
