@@ -62,14 +62,22 @@ os.chdir('/content/vv')
 
 VV_ORT   = '1.17.3'
 VV_CORE  = '0.16.4'
-VV_VVM   = '0.1.1'
+VV_VVM   = '0.16.4'   # the vvm repository tags with CORE's version
 VVM      = '0.vvm'
 
 def get(url, out):
-    if os.path.exists(out):
-        print('have', out); return
-    print('fetching', out)
-    subprocess.run(['curl', '-sfL', '-o', out, url], check=True)
+    if os.path.exists(out) and os.path.getsize(out) > 0:
+        print(f'have     {out}  ({os.path.getsize(out):,} bytes)'); return
+    print(f'fetching {out}')
+    # -f so a 404 is a failure rather than an HTML page saved as a .tgz, and the
+    # status is printed either way: a truncated download is the failure mode
+    # that looks like a corrupt archive three cells later.
+    r = subprocess.run(['curl', '-sfL', '-w', '%{http_code}', '-o', out, url],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f'download failed: {url} '
+                         f'(curl exit {r.returncode}, http {r.stdout.strip() or "?"})')
+    print(f'         {out}  ({os.path.getsize(out):,} bytes, http {r.stdout.strip()})')
 
 get(f'https://github.com/VOICEVOX/onnxruntime-builder/releases/download/voicevox_onnxruntime-{VV_ORT}/voicevox_onnxruntime-linux-x64-cuda-{VV_ORT}.tgz', 'ort.tgz')
 get(f'https://github.com/VOICEVOX/voicevox_core/releases/download/{VV_CORE}/voicevox_core-linux-x64-{VV_CORE}.zip', 'core.zip')
@@ -78,9 +86,15 @@ get('https://sourceforge.net/projects/open-jtalk/files/Dictionary/open_jtalk_dic
 
 !tar xzf ort.tgz && unzip -oq core.zip && tar xzf ojdic.tar.gz
 !cp voicevox_onnxruntime-linux-x64-cuda-{VV_ORT}/lib/*.so* .
-!cp voicevox_core-linux-x64-{VV_CORE}/lib/libvoicevox_core.so . 2>/dev/null || cp $(find . -name 'libvoicevox_core.so' | head -1) .
-!cp $(find . -name 'voicevox_core.h' | head -1) . 2>/dev/null || true
-!ls -la *.so* | head
+!cp voicevox_core-linux-x64-{VV_CORE}/lib/libvoicevox_core.so .
+!cp voicevox_core-linux-x64-{VV_CORE}/include/voicevox_core.h .
+
+# A short dictionary means the download was cut off, and that only shows up
+# much later as an unhelpful failure inside Open JTalk.
+import os
+assert os.path.exists('open_jtalk_dic_utf_8-1.11/sys.dic'), 'dictionary incomplete'
+print('sys.dic', f"{os.path.getsize('open_jtalk_dic_utf_8-1.11/sys.dic'):,}", 'bytes')
+!ls -la *.so* {VVM} | head
 """),
 
 md("""
@@ -94,7 +108,7 @@ CUDA provider on the real GPU.
 
 code("""
 REPO = '""" + REPO + """'
-for f in ['src/cudaprobe.c', 'src/cudavvm.c', 'src/onnxruntime_c_api.h', 'src/voicevox_core.h']:
+for f in ['src/cudaprobe.c', 'src/cudavvm.c', 'src/onnxruntime_c_api.h']:
     subprocess.run(['curl', '-sfL', '-o', os.path.basename(f), f'{REPO}/{f}'], check=True)
 subprocess.run(['curl', '-sfL', '-o', 'predict_duration.onnx',
                 f'{REPO}/guest/predict_duration.onnx'], check=True)
