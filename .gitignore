@@ -17,3 +17,8 @@ guest/memtest
 guest/isatest
 sysroot/opt/
 *.wav
+tts_run.log
+emu_isatest.txt
+api_*.txt
+guest/shldtest
+guest/vvagent
