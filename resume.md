@@ -167,12 +167,26 @@ this project spent a day explaining. `EMU=` still overrides.
    What it needs: a persistent `Emulator` behind the wasm API rather than one
    per call, and fd 0 backed by a buffer JS can push into. The guest half
    already exists - `vvagent` speaks exactly this protocol over stdin/stdout,
-   and the host library drives it through a pipe today. The awkward part is
-   "run until the guest blocks on an empty read and hand control back to JS":
-   `FileTable::read` already answers `kEAGAINPipe` for an empty pipe with a
-   writer, so the shape is there, but the retry currently spins inside `run()`
-   instead of unwinding. Worth doing deliberately, not at 2 a.m. with a working
-   demo on the line.
+   and the host library drives it through a pipe today.
+
+   **The one obstacle, read out of the code rather than guessed at.** The
+   blocking path is already right: `FileTable::read` answers `kEAGAINPipe` for
+   an empty pipe that still has a writer, `Sys::Read` calls
+   `Emulator::block_syscall_retry`, and that steps `rip` back two bytes (both
+   `syscall` and `int 0x80` are two bytes), marks the thread `Blocked` with a
+   predicate, and yields. So far so good. What happens next is the problem: the
+   guest agent is a single thread, so nothing else is runnable, and
+   `processes.cpp` declares *"all processes are blocked: deadlock"* and throws.
+   Which is the correct answer for every guest that exists today - the host is
+   not part of the picture.
+
+   So the change is: a way to tell the scheduler that a particular blocked
+   thread is waiting on the *embedder*, and that this is a reason to return
+   control rather than to declare deadlock. Small in lines, delicate in effect -
+   the deadlock detector is there to catch real bugs, and weakening it blindly
+   would hide them. Worth doing deliberately, with the guest agent's own
+   round trip (`VV_OP_PING`, then `analyze`, both about a second) as the test
+   before anything touches the model.
 6. **Threads are avoided, not solved.** `cpu_num_threads = 1`,
    `ORT_SEQUENTIAL`, `allow_spinning=0`. No `clone` has appeared in any trace.
 
