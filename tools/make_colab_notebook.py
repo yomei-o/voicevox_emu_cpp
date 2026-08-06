@@ -43,8 +43,18 @@ numbers and a WAV. Compare those against the local run.
 """),
 
 code("""
-!nvidia-smi -L || echo 'no GPU: Runtime -> Change runtime type -> GPU'
-!nvcc --version | tail -2
+# Stop here if there is no GPU.  Everything downstream still *runs* without one
+# and fails much later inside ONNX Runtime as "CUDA failure 35: CUDA driver
+# version is insufficient for CUDA runtime version", which sounds like a version
+# mismatch and is not one - `cudaDriverGetVersion` answers 0 when there is no
+# driver at all.
+import subprocess
+smi = subprocess.run(['nvidia-smi', '-L'], capture_output=True, text=True)
+print(smi.stdout or smi.stderr)
+assert smi.returncode == 0 and 'GPU 0' in smi.stdout, (
+    'No GPU on this runtime. Runtime -> Change runtime type -> T4 GPU, '
+    'then run this cell again.')
+!nvidia-smi | head -12
 """),
 
 md("""
