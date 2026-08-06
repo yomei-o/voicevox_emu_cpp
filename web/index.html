@@ -97,11 +97,24 @@ VOICEVOX の音声モデルは暗号化されていて、パッチの当たっ�
     <b>数時間かかります</b>。これはその手順をこのマシンで最後まで走らせて出てきた
     WAV です —— 手を加えていない、エミュレータの出力そのものです。
   </p>
-  <audio controls src="sample/emu_a.wav" style="width:100%; max-width:22rem"></audio>
+  <table style="margin-bottom:.5rem">
+    <tr><th>テキスト</th><th>音</th><th class="num">かかった時間</th><th class="num">ネイティブとの差</th></tr>
+    <tr>
+      <td>あ<br><span class="note">0.52 秒</span></td>
+      <td><audio controls src="sample/emu_a.wav" style="width:15rem; max-width:100%"></audio></td>
+      <td class="num">復号 498 秒<br>推論 2498 秒</td>
+      <td class="num">最大 3 / 3912<br>0.077%</td>
+    </tr>
+    <tr>
+      <td>ずんだもんなのだ<br><span class="note">1.45 秒</span></td>
+      <td><audio controls src="sample/emu_zundamon.wav" style="width:15rem; max-width:100%"></audio></td>
+      <td class="num">復号 545 秒<br>推論 7077 秒</td>
+      <td class="num">最大 7 / 12988<br>0.054%</td>
+    </tr>
+  </table>
   <p class="note" style="margin:.6rem 0 0">
-    「あ」（0.52 秒）。モデルの復号に 498 秒、推論に 2498 秒。
-    同じテキストをネイティブで合成したものとの差は、サンプルの最大で 3
-    （ピーク 3912 に対して 0.077%）。
+    「ネイティブとの差」は、同じテキストを Linux 上の同じ公式バイナリで合成したものと
+    サンプル単位で比べた最大差です。ピークに対して 0.1% 未満 —— 聴いて分かる差ではありません。
   </p>
 </div>
 

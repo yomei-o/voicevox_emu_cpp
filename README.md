@@ -36,6 +36,13 @@ outputs differ only in a randomly generated UUID.
 **It runs in a browser.** `web/` builds the emulator to WebAssembly and runs the
 same guest in a tab: the real `ld-linux-x86-64.so.2` maps the 18 MB runtime,
 IFUNC dispatch settles, the C++ static initialisers run, ONNX Runtime comes up.
+Text analysis - Open JTalk working out the moras and the accent - answers in
+about a second there, which makes it the half of VOICEVOX a browser can do
+interactively. Synthesis in a tab is real but takes hours, so the page ships the
+WAVs this machine produced and says exactly what they cost.
+
+    node web/test_page.mjs        # the page's own path, in node
+    node tools/browser_test.mjs   # the page, in a headless browser
 
 ### What it took
 
@@ -114,8 +121,16 @@ The emulator is an interpreter, and this is what that costs:
 | | native | `qemu-x86_64` | `x86emu` | `x86emu` in wasm |
 | --- | --- | --- | --- | --- |
 | runtime comes up (`probe`) | — | — | 4 s | 13 s |
-| model decrypt + session init | 0.6 s | 6.4 s | 8 min | ~25 min |
-| `tts`, 1.45 s of audio | 1.5 s | 517 s | hours | — |
+| dictionary load + text analysis | 0.0 s | — | 1.0 s | 1.0 s |
+| model decrypt + session init | 0.6 s | 6.4 s | 8-9 min | ~25 min |
+| `tts`, 0.52 s of audio | 0.5 s | — | 42 min | — |
+| `tts`, 1.45 s of audio | 1.5 s | 517 s | 118 min | — |
+
+And the audio that comes out is the real thing. Against a native run of the same
+text, `tools/wavcmp.mjs` puts the largest sample difference at 3 against a peak
+of 3912 for one, and 7 against 12988 for the other - under a tenth of a percent,
+which is `RSQRTPS` and `RCPPS` being *approximate* instructions that hardware
+answers to twelve bits and this emulator computes exactly.
 
 Two things make the gap that large. The interpreter retires tens of millions of
 instructions a second where the machine does billions; and CPUID here advertises
