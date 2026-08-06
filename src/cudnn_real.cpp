@@ -21,8 +21,18 @@
 #include <vector>
 
 #include "Eigen_Core.h"
+#include "cudastub.h"
 
+// VVSTUB_TIME=1 attributes these seconds to the cuDNN bucket; see cudastub.h
+// for what the split is for.
 namespace {
+
+struct Timed {
+    double t0;
+    Timed() : t0(vvstub_timing ? vvstub_now() : 0) {}
+    ~Timed() { if (vvstub_timing) vvstub_account(VVSTUB_T_CUDNN, t0); }
+};
+
 
 constexpr int kOk = 0;               // CUDNN_STATUS_SUCCESS
 constexpr int kNotSupported = 9;     // CUDNN_STATUS_NOT_SUPPORTED
@@ -228,6 +238,7 @@ int cudnnFindConvolutionBackwardDataAlgorithmEx(void*, void*, const void*, void*
 // how a bias reaches every position of every batch item.
 int cudnnAddTensor(void*, const void* alpha, void* aDesc, const void* A,
                    const void* beta, void* cDesc, void* C) {
+    Timed timed;
     const auto* a = (const TensorDesc*)aDesc;
     const auto* c = (const TensorDesc*)cDesc;
     if (a->type != kDataTypeFloat || c->type != kDataTypeFloat) return kNotSupported;
@@ -262,6 +273,7 @@ int cudnnAddTensor(void*, const void* alpha, void* aDesc, const void* A,
 int cudnnConvolutionForward(void*, const void* alpha, void* xDesc, const void* x,
                             void* wDesc, const void* w, void* convDesc, int algo,
                             void*, size_t, const void* beta, void* yDesc, void* y) {
+    Timed timed;
     (void)algo;
     const auto* xd = (const TensorDesc*)xDesc;
     const auto* wd = (const FilterDesc*)wDesc;
@@ -325,6 +337,45 @@ int cudnnConvolutionForward(void*, const void* alpha, void* xDesc, const void* x
     for (int n = 0; n < xs.n; n++) {
         for (int g = 0; g < groups; g++) {
             const float* xg = xp + ((long)n * xs.c + (long)g * in_c_per_group) * xs.len;
+            float* yg = yp + ((long)n * ys.c + (long)g * out_c_per_group) * ys.len;
+            ConstMatrixMap xm(xg, in_c_per_group, xs.len);
+            MatrixMap ym(yg, out_c_per_group, ys.len);
+
+            if (stride == 1) {
+                // One GEMM per tap, straight out of the input.
+                //
+                // im2col materialises an out_len x (in_c * k) matrix, which for
+                // this model's widest layer is 8000 x 1408 - 45 MB built and
+                // read back for a single convolution.  The arithmetic is the
+                // same either way; what differs is that this reads the input k
+                // times instead of copying it k times, and 90 % of the shim's
+                // time was here.
+                if (be == 0.0f)
+                    ym.setZero();
+                else
+                    ym *= be;
+                for (int t = 0; t < k; t++) {
+                    // Output positions whose tap t lands inside the input.
+                    int shift = t * dilation - pad;
+                    int o0 = shift < 0 ? -shift : 0;
+                    int o1 = xs.len - shift;
+                    if (o1 > ys.len) o1 = ys.len;
+                    if (o1 <= o0) continue;
+                    // W(oc, ic, t) has the taps innermost, so a fixed t is a
+                    // strided view rather than a copy.
+                    Eigen::Map<const Matrix, 0, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>>
+                        wt(wp + (long)g * out_c_per_group * in_c_per_group * k + t,
+                           out_c_per_group, in_c_per_group,
+                           Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(
+                               (long)in_c_per_group * k, k));
+                    ym.block(0, o0, out_c_per_group, o1 - o0).noalias() +=
+                        al * (wt * xm.block(0, o0 + shift, in_c_per_group, o1 - o0));
+                }
+                continue;
+            }
+
+            // A strided convolution does not decompose that way; im2col still
+            // does.  Nothing in these models takes this path.
             im2col(xg, in_c_per_group, xs.len, k, pad, stride, dilation, ys.len, col);
 
             // The filter block for this group, as [out_c_per_group, in*k].
@@ -333,7 +384,6 @@ int cudnnConvolutionForward(void*, const void* alpha, void* xDesc, const void* x
             // [out_c_per_group, out_len] = W * colᵀ
             Matrix out = wm * col.transpose();
 
-            float* yg = yp + ((long)n * ys.c + (long)g * out_c_per_group) * ys.len;
             for (int oc = 0; oc < out_c_per_group; oc++)
                 for (int i = 0; i < ys.len; i++) {
                     float* dst = &yg[(long)oc * ys.len + i];
@@ -351,6 +401,7 @@ int cudnnConvolutionBackwardData(void*, const void* alpha, void* wDesc,
                                  const void* w, void* dyDesc, const void* dy,
                                  void* convDesc, int algo, void*, size_t,
                                  const void* beta, void* dxDesc, void* dx) {
+    Timed timed;
     (void)algo;
     const auto* wd = (const FilterDesc*)wDesc;
     const auto* dyd = (const TensorDesc*)dyDesc;

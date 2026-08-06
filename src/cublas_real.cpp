@@ -12,8 +12,17 @@
 #include <cstring>
 
 #include "Eigen_Core.h"
+#include "cudastub.h"
 
 namespace {
+
+// VVSTUB_TIME=1 attributes these seconds to the cuBLAS bucket.
+struct Timed {
+    double t0;
+    Timed() : t0(vvstub_timing ? vvstub_now() : 0) {}
+    ~Timed() { if (vvstub_timing) vvstub_account(VVSTUB_T_CUBLAS, t0); }
+};
+
 
 constexpr int kOk = 0;                   // CUBLAS_STATUS_SUCCESS
 constexpr int kNotSupported = 15;        // CUBLAS_STATUS_NOT_SUPPORTED
@@ -54,6 +63,7 @@ int cublasSetPointerMode_v2(void*, int) { return kOk; }
 int cublasSgemm_v2(void*, int transa, int transb, int m, int n, int k,
                    const float* alpha, const float* A, int lda, const float* B,
                    int ldb, const float* beta, float* C, int ldc) {
+    Timed timed;
     float al = alpha ? *alpha : 1.0f;
     float be = beta ? *beta : 0.0f;
 
@@ -90,6 +100,7 @@ int cublasSgemmStridedBatched(void* h, int transa, int transb, int m, int n, int
 int cublasSgeam(void*, int transa, int transb, int m, int n, const float* alpha,
                 const float* A, int lda, const float* beta, const float* B, int ldb,
                 float* C, int ldc) {
+    Timed timed;
     float al = alpha ? *alpha : 1.0f;
     float be = beta ? *beta : 0.0f;
     Map c(C, m, n, Stride(ldc));

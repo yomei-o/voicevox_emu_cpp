@@ -18,12 +18,33 @@
 #include "cudastub.h"
 
 #include <string.h>
+#include <time.h>
 
 int vvstub_trace = 0;
+int vvstub_timing = 0;
+
+// The three stand-in libraries are separate objects, but only libcudart links
+// this file; the others resolve these at load time against it.
+static double bucket_seconds[VVSTUB_T_COUNT];
+static long long bucket_calls[VVSTUB_T_COUNT];
+
+double vvstub_now(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
+
+void vvstub_account(int bucket, double started) {
+    if (bucket < 0 || bucket >= VVSTUB_T_COUNT) return;
+    bucket_seconds[bucket] += vvstub_now() - started;
+    bucket_calls[bucket]++;
+}
 
 __attribute__((constructor)) static void vvstub_init(void) {
     const char* t = getenv("VVSTUB_TRACE");
     vvstub_trace = t && *t && *t != '0';
+    const char* m = getenv("VVSTUB_TIME");
+    vvstub_timing = m && *m && *m != '0';
 }
 
 void vvstub_note(const char* name) {
@@ -127,10 +148,12 @@ int cudaLaunchKernel(const void* func, unsigned long long gx, unsigned long long
                      size_t shared, void* stream) {
     (void)gx; (void)gy; (void)bx; (void)by; (void)shared; (void)stream;
     launches++;
+    double t0 = vvstub_timing ? vvstub_now() : 0;
     const char* name = name_of(func);
     // A kernel this build knows how to do natively gets done; the rest are
     // still counted and named, which is what the enumeration needed.
     int handled = vvstub_run_kernel(name, args);
+    if (vvstub_timing) vvstub_account(VVSTUB_T_KERNEL, t0);
     if (!handled) unhandled++;
     if (vvstub_trace || !handled) {
         printf("kernel %s%s\n", handled ? "[done] " : "", name);
@@ -142,6 +165,19 @@ int cudaLaunchKernel(const void* func, unsigned long long gx, unsigned long long
 __attribute__((destructor)) static void vvstub_report(void) {
     fprintf(stderr, "[cuda] %zu kernels registered, %zu launches\n", kernel_count,
             launches);
+    if (vvstub_timing) {
+        static const char* names[VVSTUB_T_COUNT] = {"kernels", "cuDNN", "cuBLAS"};
+        double total = 0;
+        for (int i = 0; i < VVSTUB_T_COUNT; i++) {
+            total += bucket_seconds[i];
+            fprintf(stderr, "[time] %-8s %8.3f s  %lld calls\n", names[i],
+                    bucket_seconds[i], bucket_calls[i]);
+        }
+        fprintf(stderr,
+                "[time] %-8s %8.3f s  <- the arithmetic; whatever the caller "
+                "measured beyond this is ONNX Runtime's own\n",
+                "total", total);
+    }
     fflush(stderr);
 }
 

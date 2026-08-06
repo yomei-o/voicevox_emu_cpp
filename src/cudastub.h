@@ -29,6 +29,16 @@ extern "C" {
 extern int vvstub_trace;
 void vvstub_note(const char* name);
 
+// VVSTUB_TIME=1: where the shim's own seconds go.  The CUDA provider hands
+// *all* of its arithmetic across this boundary, so what these three buckets add
+// up to is the arithmetic, and whatever the caller measured beyond it is ONNX
+// Runtime's own plumbing.  That split is the thing to know before deciding
+// whether moving the arithmetic out of an emulator is worth the work.
+enum { VVSTUB_T_KERNEL, VVSTUB_T_CUDNN, VVSTUB_T_CUBLAS, VVSTUB_T_COUNT };
+extern int vvstub_timing;
+double vvstub_now(void);
+void vvstub_account(int bucket, double started);
+
 // Implemented in cudakernels.c: does the kernel natively when it knows how,
 // and answers 0 when it does not.
 int vvstub_run_kernel(const char* name, void** args);

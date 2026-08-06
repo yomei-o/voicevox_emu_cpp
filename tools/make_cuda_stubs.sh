@@ -25,6 +25,27 @@ PROVIDER="$SRC/libvoicevox_onnxruntime_providers_cuda.so"
 OUT=guest/cudastub
 mkdir -p "$OUT"
 
+# The optimiser flags.  These stand-ins run *outside* the emulator, on the real
+# host, so unlike the guest they may use whatever the host has - and the
+# convolutions are 90 % of the shim's time, so it matters.  Measured, one
+# utterance, time inside cuDNN (tools/bench_shim.sh):
+#
+#     -O2                   6.2 s
+#     -O3                   7.5 s     <- slower; Eigen unrolls badly here
+#     -O3 -mavx2 -mfma      3.8 s
+#
+# `-march=native` is *not* the answer on a machine with AVX-512: this repo's
+# flattened Eigen does not carry src/Core/arch/AVX512, and the build fails
+# outright.  AVX2 is the practical ceiling with it.
+if [ -z "$OPT" ]; then
+    if grep -q ' avx2 ' /proc/cpuinfo 2>/dev/null; then
+        OPT="-O3 -mavx2 -mfma"
+    else
+        OPT="-O2"
+    fi
+fi
+echo "flags $OPT"
+
 # Everything the provider needs, grouped by the library it expects it from.
 nm -D --undefined-only "$PROVIDER" | awk '{print $2}' | grep '@lib' |
     sed 's/@GLIBC[^ ]*//' | sort -u > "$OUT/imports.txt"
@@ -76,17 +97,17 @@ echo "== compiling"
 for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libcudnn.so.8 libcufft.so.11; do
     base=$(echo "$lib" | sed 's/\.so\..*//')
     extra=""
-    cc="gcc -O2"
+    cc="${CC:-gcc} $OPT"
     [ "$base" = libcudart ] && extra="src/cudastub.c src/cudakernels.c"
     if [ "$base" = libcublas ]; then
         extra="src/cublas_real.cpp"
-        cc="${CXX:-$HOME/gpp/bin/g++} -O2 -Ithird_party/eigen_flat"
+        cc="${CXX:-$HOME/gpp/bin/g++} $OPT -Ithird_party/eigen_flat"
     fi
     if [ "$base" = libcudnn ]; then
         # The convolutions are C++ and use Eigen, so this one needs a C++
         # compiler.  tools/get_gpp_nosudo.sh provides one where apt cannot.
         extra="src/cudnn_real.cpp"
-        cc="${CXX:-$HOME/gpp/bin/g++} -O2 -Ithird_party/eigen_flat"
+        cc="${CXX:-$HOME/gpp/bin/g++} $OPT -Ithird_party/eigen_flat"
     fi
 
     # The real CUDA libraries version their symbols, and the provider's
