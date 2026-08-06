@@ -159,13 +159,20 @@ drives the demo page in a headless browser, waits it out, and pulls the WAV back
 out of the page; the bytes it gets are **identical** to the x86-64 build's, and
 within 3 of 3912 of native `libvoicevox_core`. Slow, and the same answer.
 
-And the audio that comes out is the real thing. The same utterance was made four
-ways - on a Tesla T4 through the CUDA build, on a Linux CPU, under `x86emu`, and
-in a browser tab - and `tools/wavcmp.mjs` puts every pair within **8 of 12988**,
-under a tenth of a percent. Not "it ran under an emulator": the same answer as
-the dedicated hardware. What difference there is comes from `RSQRTPS` and
-`RCPPS` being *approximate* instructions that hardware answers to twelve bits
-and this emulator computes exactly.
+And the audio that comes out is the real thing. The same utterance was made five
+ways - on a Tesla T4 through the CUDA build, on a Linux CPU, under `x86emu`, in a
+browser tab, and through the CUDA build on a machine with **no GPU at all** - and
+`tools/wavcmp.mjs` puts every pair within **8 of 12988**, under a tenth of a
+percent. Not "it ran under an emulator": the same answer as the dedicated
+hardware. What difference there is comes from `RSQRTPS` and `RCPPS` being
+*approximate* instructions that hardware answers to twelve bits and this emulator
+computes exactly.
+
+That fifth way is [CUDA_SHIM.md](CUDA_SHIM.md): run the *CUDA* build of
+voicevox_onnxruntime against stand-in libcudart / cuBLAS / cuDNN and do the
+arithmetic natively with Eigen. ONNX Runtime registers 4757 kernels; an utterance
+launches 43, in 20 loop shapes, plus eight library functions that compute.
+Filling those in gets the T4's own output to within 2 samples of 12988.
 
 Two things make the gap that large. The interpreter retires tens of millions of
 instructions a second where the machine does billions; and CPUID here advertises

@@ -106,10 +106,50 @@ They are in `colab/predict_duration_reference.txt`. That is the shim's target,
 and it is not a matter of opinion: a shim that gets these is right, one that does
 not is wrong, and the index of the first disagreement says where to look.
 
-Where the shim stands against it today: the convolutions are implemented and
-running, `_UnaryElementWise` and `ExpandKernel2D` are done, and the output is
-structured but wrong - `_GatherKernel`, `_ConcatKernel` and `cublasSgeam` are
-still returning success without doing anything.
+**The shim reproduces all sixteen**, to every digit. `tools/check_shim.sh` runs
+it. And having done that it goes on to make the audio:
+
+| "ずんだもんなのだ", 1.45 s | largest sample difference | against a peak of 12988 |
+| --- | --- | --- |
+| the shim, against the T4 | 2 | 0.015 % |
+| the shim, against `x86emu` | 7 | 0.054 % |
+
+and for "あ": 3 of 3912 against the T4. `web/sample/shim_*.wav` are its output,
+kept beside the T4's and the emulator's. All 377 launches an utterance makes are
+handled natively; nothing falls through to a stub.
+
+So the answer to "eight functions and twenty loop shapes" is: yes, that was the
+whole of it. The compute surface is `src/cudnn_real.cpp` (convolution, its
+transpose, bias), `src/cublas_real.cpp` (Sgemm, its batched form, Sgeam) and
+`src/cudakernels.c` (twenty kernel families over five element types) - about
+1400 lines, all of it plain loops and Eigen.
+
+### The two bugs worth writing down
+
+Both were found the same way, and neither would have been findable without a
+reference that is exact.
+
+**A shift of six.** With the convolutions running but Gather and Sgeam still
+empty, `predict_duration` answered structured nonsense. Once those were filled
+in, the output became the reference *shifted by six positions* - our `[0..5]`
+were its `[6..11]`, to every digit. That is a legible failure: an exact shift
+means the arithmetic is right and the indexing is not. ONNX Runtime lays a 1-D
+convolution out as `[N, C, W, 1]` - the extent is in the *height* slot, and the
+width is the degenerate one. Reading pad/stride/dilation at the last slot got
+`pad = 0` where the model asked for `2`, and the three convolutions shifted by
+two apiece. Noise would have said nothing; an exact shift said where to look.
+
+**A unary division.** The vocoder then produced *silence* - and the sample count
+was exactly right, which said the duration model was correct and the vocoder was
+not. `VVSTUB_STATS=1` prints each kernel's output range, and the trace showed the
+values multiplying by about a hundred per residual block until they reached
+infinity. The cause: `OP_Div` appears as a **unary** operator, 22 times, once per
+reduction. It is not `1/x`. It is how ONNX Runtime finishes a `ReduceMean` - the
+reduction sums and this divides by the count, which travels inside the functor
+the way LeakyRelu's slope does. Reading it as a reciprocal turned every mean into
+its inverse, so every LayerNorm scaled up instead of down. The ranges said so
+plainly: the reduction's mean was exactly 64 times its input's, which is a sum of
+64 things, not a reciprocal of anything.
 
 And the audio it makes is the audio everything else here makes. The same
 utterance, through four very different machines:
@@ -126,7 +166,9 @@ thing this project needed to say. Not "it ran under an emulator", but **the
 same answer as the dedicated hardware**, from a CPU that is software, in a
 browser tab.
 
-`web/sample/gpu_*.wav` are the T4's own output, kept beside the emulator's.
+`web/sample/gpu_*.wav` are the T4's own output, kept beside the emulator's — and
+`web/sample/shim_*.wav` are what this document is about: the same audio, from the
+CUDA build, on a machine with no GPU and no CUDA installed.
 
 Four things went wrong getting there, and all four failed in a way that pointed
 somewhere else. They are written down because each would cost an hour again:
@@ -145,24 +187,43 @@ line, after three wrong guesses.
 
 ## So: is it a weekend or a year?
 
-Neither, but far closer to the first than the 4757 kernels suggested. The
-compute surface is **eight functions and twenty loop shapes**. The rest is
-descriptor plumbing and stubs that return success.
+A weekend. The compute surface was **eight functions and twenty loop shapes**,
+exactly as the measurement said, and filling them in produces the T4's audio to
+within 2 samples of 12988. The rest is descriptor plumbing and stubs that return
+success.
 
-What is left to find out, in order:
+Two of the three open questions are now answered.
 
-1. **Does it run under the emulator?** Everything above was measured natively on
-   Linux, which is the right way round — the runtime's behaviour is the same
-   either way and iteration is seconds instead of minutes. The emulator needs
-   one new thing: hooking an ELF guest's imports. `Emulator::dispatch_hook` is
-   address-based and already exists; wiring it to a PLT is new work.
-2. **Are the shapes right?** With cuBLAS and cuDNN returning success without
-   computing, the values are noise, and noise can take a different branch than
-   real data would. The kernel list may be incomplete until the maths is real.
-3. **Is it actually faster?** The point of the exercise. Native Eigen
-   convolutions against an emulated CPU should be enormous, but the tensors
-   still cross the emulator's memory on every call, and 377 launches is 377
-   round trips.
+1. **Are the shapes right?** *Yes.* This was a real worry: with cuBLAS and cuDNN
+   returning success without computing, the values were noise, and noise can take
+   a different branch than real data would. It did not. The kernel list measured
+   against nonsense is the same list the working shim uses — 43 specialisations,
+   20 families, 377 launches for an utterance.
+
+2. **Is it faster?** *Not on its own.* Same machine, same library, same
+   utterance, "ずんだもんなのだ":
+
+   | | tts |
+   | --- | --- |
+   | the CPU provider (MLAS) | 1.1 s |
+   | the shim | ~10 s |
+
+   Which is the expected answer and worth stating plainly: MLAS is hand-written
+   AVX across every core, and this is im2col plus scalar C loops. A tenth of the
+   speed for a thousandth of the code is the trade that was made on purpose.
+
+   The comparison that matters is the other one. Synthesis *inside the emulator*
+   takes hours; this moves all of the arithmetic out of it for ten seconds of
+   native work. That is the win the whole design was for — but see the next
+   point, because it has not been measured yet.
+
+3. **Does it run under the emulator?** *Still unknown, and this is now the only
+   thing left.* Everything above was measured natively on Linux, which was the
+   right way round: the runtime behaves the same either way and iteration is
+   seconds instead of minutes. The emulator needs one new thing — hooking an ELF
+   guest's imports. `Emulator::dispatch_hook` is address-based and already
+   exists; wiring it to a PLT is new work. And 377 launches is 377 round trips
+   across the emulator's memory, which is the part that could still spoil it.
 
 ## Where the line is
 

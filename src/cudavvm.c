@@ -18,6 +18,7 @@
 // thing is used for real; nothing here reads a model back out.
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "voicevox_core.h"
 
@@ -62,9 +63,15 @@ int main(int argc, char** argv) {
     OpenJtalkRc* ojt = NULL;
     if (check(voicevox_open_jtalk_rc_new(dict, &ojt), "open_jtalk_rc_new")) return 1;
 
-    step("voicevox_synthesizer_new  <- acceleration = GPU");
+    // VVSTUB_CPU=1 asks for the CPU provider instead, which is how the shim
+    // gets a like-for-like baseline: the same binary, the same model, the same
+    // utterance, with the arithmetic going somewhere else.
+    int cpu_mode = getenv("VVSTUB_CPU") && *getenv("VVSTUB_CPU") != '0';
+    step(cpu_mode ? "voicevox_synthesizer_new  <- acceleration = CPU"
+                  : "voicevox_synthesizer_new  <- acceleration = GPU");
     VoicevoxInitializeOptions iopts = voicevox_make_default_initialize_options();
-    iopts.acceleration_mode = VOICEVOX_ACCELERATION_MODE_GPU;
+    iopts.acceleration_mode = cpu_mode ? VOICEVOX_ACCELERATION_MODE_CPU
+                                       : VOICEVOX_ACCELERATION_MODE_GPU;
     VoicevoxSynthesizer* syn = NULL;
     if (check(voicevox_synthesizer_new(rt, ojt, iopts, &syn), "synthesizer_new")) return 1;
     printf("      is_gpu_mode = %s\n",
@@ -86,7 +93,12 @@ int main(int argc, char** argv) {
     VoicevoxTtsOptions topts = voicevox_make_default_tts_options();
     uintptr_t len = 0;
     uint8_t* wav = NULL;
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     VoicevoxResultCode r = voicevox_synthesizer_tts(syn, text, style, topts, &len, &wav);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    printf("      tts took %.3f s\n",
+           (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9);
     if (r == VOICEVOX_RESULT_OK) {
         printf("      produced %zu bytes\n", (size_t)len);
         FILE* f = fopen(out_path, "wb");
