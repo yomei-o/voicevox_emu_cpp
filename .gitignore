@@ -40,3 +40,4 @@ web/guest/probe
 guest/analyze
 build/isatest_*.txt
 browser_out.wav
+guest/ssebench
