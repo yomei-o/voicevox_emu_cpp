@@ -152,9 +152,9 @@ VOICEVOX の音声モデルは暗号化されていて、パッチの当たっ�
   <p class="note" style="margin-bottom:.6rem">
     VOICEVOX の後ろ半分。音声モデルを復号し、ONNX Runtime のセッションを作り、
     ニューラルボコーダを回します。<b class="warn">ここはとても遅いです</b> —
-    デスクトップのネイティブ版エミュレータで、モデルの読み込みに 8 分、
-    「あ」の一言に 42 分かかりました。ブラウザの中ではモデルの読み込みだけで
-    20 分かかります（実測）。
+    このマシンのブラウザで実測すると、モデルの読み込みに <b>23 分</b>、
+    「あ」の一言の推論に <b>99 分</b> —— 合計 2 時間 3 分、444 億命令でした。
+    ネイティブ版エミュレータなら 8 分 + 42 分です。
     追加ダウンロードは <b>約 76 MB</b>（ONNX Runtime と音声モデル）。
   </p>
   <button id="prep-speak" class="secondary">材料をダウンロード (+76 MB)</button>
@@ -307,11 +307,13 @@ async function ensureWorker() {
            <div class="note">${mb(m.wav.length)} の WAV を ${mins(m.seconds)}で生成
            （${(m.instructions / 1e9).toFixed(2)} G 命令）
            — <a download="zundamon.wav" href="${url}">ダウンロード</a></div>`;
+        stopClock();
         $('status-run').textContent = '完了';
         $('go-speak').disabled = false;
       }
     } else if (m.type === 'error') {
       log('\n*** ' + m.text + '\n');
+      stopClock();
       $('status-run').innerHTML = '<span class="warn">失敗しました — ゲストの出力を見てください</span>';
       if (!ready.analyze) $('prep-analyze').disabled = false;
       if (!ready.speak) $('prep-speak').disabled = false;
@@ -369,11 +371,35 @@ $('go-analyze').onclick = () => {
   worker.postMessage({type: 'run', mode: 'analyze', text: $('text-analyze').value});
 };
 
+// Synthesis prints one line and then says nothing for an hour and a half,
+// because the whole of it is a single call into the guest.  A clock that keeps
+// moving is the difference between "working" and "hung".
+let tick = null;
+
+function startClock() {
+  const t0 = Date.now();
+  const say = () => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    const mm = String(Math.floor(s / 60)).padStart(2, '0');
+    const ss = String(s % 60).padStart(2, '0');
+    $('status-run').innerHTML =
+      `合成中 — 経過 <b>${Math.floor(s / 3600)}:${mm}:${ss}</b>。` +
+      'この機械では読み込みに 23 分、「あ」の推論に 99 分かかりました。' +
+      'タブを閉じないでください。';
+  };
+  say();
+  tick = setInterval(say, 1000);
+}
+
+function stopClock() {
+  if (tick) clearInterval(tick);
+  tick = null;
+}
+
 $('go-speak').onclick = () => {
   $('go-speak').disabled = true;
   $('player').innerHTML = '';
-  $('status-run').textContent =
-    '合成中 — 進み具合はゲストの出力に出ます。タブを閉じないでください。';
+  startClock();
   termText = '';
   term.textContent = '';
   lastGuestStdout = '';
