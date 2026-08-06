@@ -184,6 +184,29 @@ print()
 print('LD_LIBRARY_PATH =', LD)
 """),
 
+code("""
+# The two numbers error 35 compares, asked of the runtime that will actually be
+# loaded.  It has to be a separate process: glibc reads LD_LIBRARY_PATH once, at
+# startup, so changing it in this notebook does not affect this notebook.
+check = (
+    "import ctypes;"
+    "rt = ctypes.CDLL('libcudart.so.12');"
+    "v = ctypes.c_int();"
+    "rt.cudaRuntimeGetVersion(ctypes.byref(v));"
+    "print('cudart says its version is', v.value);"
+    "rt.cudaDriverGetVersion(ctypes.byref(v));"
+    "print('the driver supports up to  ', v.value);"
+    "d = ctypes.c_int();"
+    "print('cudaGetDeviceCount ->', rt.cudaGetDeviceCount(ctypes.byref(d)), 'devices', d.value)"
+)
+r = subprocess.run([sys.executable, '-c', check], capture_output=True, text=True,
+                   env=dict(os.environ))
+print(r.stdout or r.stderr)
+print('(the numbers are 1000*major + 10*minor: 12040 is CUDA 12.4)')
+print('If the first is larger than the second, that is exactly error 35 and the')
+print('cell above has not managed to put an older cudart first.')
+"""),
+
 md("""
 ## 2. A plain `.onnx` to start with
 
