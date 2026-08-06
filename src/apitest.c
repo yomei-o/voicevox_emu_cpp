@@ -75,6 +75,10 @@ static int write_file(const char* path, const void* data, size_t n) {
 }
 
 int main(int argc, char** argv) {
+    // Under the emulator a single call can take ten minutes, and a run whose
+    // output only appears at the end cannot be watched at all.
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     const char* ort_path = argc > 1 ? argv[1] : "/opt/vv/libvoicevox_onnxruntime.so.1.17.3";
     const char* dict = argc > 2 ? argv[2] : "/opt/vv/open_jtalk_dic_utf_8-1.11";
     const char* vvm = argc > 3 ? argv[3] : "/opt/vv/0.vvm";

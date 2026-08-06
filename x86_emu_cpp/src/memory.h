@@ -60,6 +60,25 @@ public:
     // munmap() followed by mmap() means.
     void unmap(uint64_t addr, uint64_t size);
 
+    // Every guest memory access ends up in host_ptr, so what host_ptr costs is
+    // multiplied by billions.  A hash lookup per byte is far more than the work
+    // it is finding, and a guest with a gigabyte live has a quarter of a
+    // million pages for the table to spread over.
+    //
+    // So: a direct-mapped cache of resolved pages, the smallest thing that
+    // works.  Code and stack and the array being walked land in different slots
+    // and all stay resident, which is the case that matters; a conflict costs
+    // one hash lookup, which is what every access used to cost.
+    //
+    // A cached entry can only go stale when a page is freed, so unmap() and
+    // clone_from() clear it and nothing else has to.  map() never replaces a
+    // page that exists, and a miss is never cached, so neither can invalidate
+    // anything.  The pages themselves are separately allocated, so the table
+    // rehashing does not move them.
+    static constexpr int kTlbBits = 10;
+    static constexpr int kTlbSize = 1 << kTlbBits;
+    static constexpr uint64_t kTlbNone = ~0ull;
+
     void read(uint64_t addr, void* dst, uint64_t len) const;
     void write(uint64_t addr, const void* src, uint64_t len);
 
@@ -103,6 +122,7 @@ public:
     // what fork() means for an address space.
     void clone_from(const Memory& other) {
         pages_.clear();
+        tlb_flush();
         for (const auto& [index, page] : other.pages_)
             pages_[index] = std::make_unique<Page>(*page);
         regions_ = other.regions_;
@@ -113,7 +133,26 @@ public:
 private:
     using Page = std::array<uint8_t, kPageSize>;
 
-    uint8_t* host_ptr(uint64_t addr, bool for_write) const;
+    struct TlbEntry {
+        uint64_t page = kTlbNone;
+        uint8_t* host = nullptr;
+    };
+
+    uint8_t* host_ptr(uint64_t addr, bool for_write) const {
+        uint64_t page = addr >> kPageBits;
+        const TlbEntry& e = tlb_[page & (kTlbSize - 1)];
+        if (e.page == page) return e.host + (addr & kPageMask);
+        return host_ptr_slow(addr, for_write);
+    }
+
+    uint8_t* host_ptr_slow(uint64_t addr, bool for_write) const;
+
+    void tlb_flush() {
+        for (auto& e : tlb_) {
+            e.page = kTlbNone;
+            e.host = nullptr;
+        }
+    }
 
     template <typename T>
     T read_int(uint64_t addr) const {
@@ -140,6 +179,7 @@ private:
     }
 
     mutable std::unordered_map<uint64_t, std::unique_ptr<Page>> pages_;
+    mutable TlbEntry tlb_[kTlbSize];
     std::vector<Region> regions_;
 };
 

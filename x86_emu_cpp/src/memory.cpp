@@ -41,11 +41,22 @@ void Memory::unmap(uint64_t addr, uint64_t size) {
     if (size == 0) return;
     uint64_t first = addr >> kPageBits;
     uint64_t last = (addr + size - 1) >> kPageBits;
-    for (uint64_t p = first; p <= last; ++p) pages_.erase(p);
+    for (uint64_t p = first; p <= last; ++p) {
+        pages_.erase(p);
+        // The freed page may be in the cache, and a stale entry there is a
+        // pointer into released memory.  Clearing only the slot it could
+        // occupy keeps a large munmap from costing the whole cache.
+        TlbEntry& e = tlb_[p & (kTlbSize - 1)];
+        if (e.page == p) {
+            e.page = kTlbNone;
+            e.host = nullptr;
+        }
+    }
 }
 
-uint8_t* Memory::host_ptr(uint64_t addr, bool for_write) const {
-    auto it = pages_.find(addr >> kPageBits);
+uint8_t* Memory::host_ptr_slow(uint64_t addr, bool for_write) const {
+    uint64_t page = addr >> kPageBits;
+    auto it = pages_.find(page);
     if (it == pages_.end()) {
         char buf[128];
         std::snprintf(buf, sizeof buf, "unmapped memory %s at 0x%016llX",
@@ -53,7 +64,11 @@ uint8_t* Memory::host_ptr(uint64_t addr, bool for_write) const {
                       static_cast<unsigned long long>(addr));
         throw MemoryFault(addr, for_write, buf);
     }
-    return it->second->data() + (addr & kPageMask);
+    uint8_t* base = it->second->data();
+    TlbEntry& e = tlb_[page & (kTlbSize - 1)];
+    e.page = page;
+    e.host = base;
+    return base + (addr & kPageMask);
 }
 
 void Memory::read(uint64_t addr, void* dst, uint64_t len) const {
