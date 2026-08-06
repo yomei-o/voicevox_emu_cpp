@@ -45,3 +45,4 @@ guest/cudastub/
 guest/cudaprobe
 guest/cudavvm
 cuda/
+build/api/eigentest*
