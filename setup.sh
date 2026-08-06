@@ -17,9 +17,11 @@ echo "=== 1/3  unpacking the payload"
 sh unpack.sh
 
 echo "=== 2/3  emulator"
-if [ -x ../x86_emu_cpp/x86emu.exe ] || [ -x ../x86_emu_cpp/x86emu ]; then
-    echo "    using the sibling checkout at ../x86_emu_cpp"
-elif [ -x x86_emu_cpp/x86emu.exe ] || [ -x x86_emu_cpp/x86emu ]; then
+# The vendored copy, not a sibling checkout: the fixes this needs live here
+# until they are merged back, and a sibling built before them fails in the
+# original, very confusing way.  See emu_path.sh.
+if [ -x x86_emu_cpp/build/Release/x86emu.exe ] || [ -x x86_emu_cpp/x86emu.exe ] ||
+   [ -x x86_emu_cpp/x86emu ]; then
     echo "    already built"
 else
     (cd x86_emu_cpp && sh build.sh)

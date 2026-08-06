@@ -98,10 +98,10 @@ and `tools/check_isa.sh` belong upstream too - they are emulator tests, not
 voicevox ones.
 
 **Merge policy.** Work on the emulator here, merge back upstream in one
-deliberate step. `setup.sh` prefers a built `../x86_emu_cpp/x86emu.exe` when a
-sibling checkout exists, so **delete the sibling binary or set `EMU=`** while
-working here, or there is no telling which one ran. The sibling on this machine
-does *not* have these changes.
+deliberate step. The run scripts now prefer the **vendored** build and print
+which one they chose; they used to prefer a sibling checkout, which on this
+machine is a build from before all of the above and fails in exactly the way
+this project spent a day explaining. `EMU=` still overrides.
 
 ## What is unfinished
 
