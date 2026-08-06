@@ -11,6 +11,11 @@
 //
 //     gcc -O2 -o apitest apitest.c -lvoicevox_core        # the original
 //     gcc -O2 -o apitest apitest.c vvhost.c -lpthread     # this project
+//
+// `--no-audio` skips the three calls that generate audio.  Everything else in
+// the API costs seconds even under the emulator; those cost hours, and they are
+// what vvsay exercises anyway.  It is how the rest of the surface gets checked
+// through a real emulated run rather than only against the native library.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,6 +83,16 @@ int main(int argc, char** argv) {
     // Under the emulator a single call can take ten minutes, and a run whose
     // output only appears at the end cannot be watched at all.
     setvbuf(stdout, NULL, _IOLBF, 0);
+
+    int no_audio = 0;
+    for (int i = 1; i < argc; i++)
+        if (strcmp(argv[i], "--no-audio") == 0) {
+            no_audio = 1;
+            // Take it out so the positional arguments keep their places.
+            for (int j = i; j < argc - 1; j++) argv[j] = argv[j + 1];
+            argc--;
+            i--;
+        }
 
     const char* ort_path = argc > 1 ? argv[1] : "/opt/vv/libvoicevox_onnxruntime.so.1.17.3";
     const char* dict = argc > 2 ? argv[2] : "/opt/vv/open_jtalk_dic_utf_8-1.11";
@@ -297,7 +312,9 @@ int main(int argc, char** argv) {
         voicevox_json_free(kana_phrases);
     }
 
-    {
+    if (no_audio) {
+        printf("      (--no-audio: synthesis, tts and tts_from_kana skipped)\n");
+    } else {
         VoicevoxSynthesisOptions sopts = voicevox_make_default_synthesis_options();
         uintptr_t len = 0;
         uint8_t* wav = NULL;
@@ -313,7 +330,7 @@ int main(int argc, char** argv) {
     }
     voicevox_json_free(query);
 
-    {
+    if (!no_audio) {
         VoicevoxTtsOptions topts = voicevox_make_default_tts_options();
         uintptr_t len = 0;
         uint8_t* wav = NULL;
@@ -388,11 +405,13 @@ int main(int argc, char** argv) {
                voicevox_synthesizer_create_sing_frame_volume(syn, score, fq, style, &vol));
             voicevox_json_free(vol);
             ok("voicevox_ensure_compatible", voicevox_ensure_compatible(score, fq));
-            uintptr_t len = 0;
-            uint8_t* wav = NULL;
-            ok("voicevox_synthesizer_frame_synthesis",
-               voicevox_synthesizer_frame_synthesis(syn, fq, style, &len, &wav));
-            voicevox_wav_free(wav);
+            if (!no_audio) {
+                uintptr_t len = 0;
+                uint8_t* wav = NULL;
+                ok("voicevox_synthesizer_frame_synthesis",
+                   voicevox_synthesizer_frame_synthesis(syn, fq, style, &len, &wav));
+                voicevox_wav_free(wav);
+            }
         }
         voicevox_json_free(fq);
     }
