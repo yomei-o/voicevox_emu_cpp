@@ -120,15 +120,22 @@ int __cudaPopCallConfiguration(void* gridDim, void* blockDim, size_t* shared,
 
 // ---- what the experiment is for -------------------------------------------
 
-static size_t launches;
+static size_t launches, unhandled;
 
 int cudaLaunchKernel(const void* func, unsigned long long gx, unsigned long long gy,
                      unsigned long long bx, unsigned long long by, void** args,
                      size_t shared, void* stream) {
-    (void)gx; (void)gy; (void)bx; (void)by; (void)args; (void)shared; (void)stream;
+    (void)gx; (void)gy; (void)bx; (void)by; (void)shared; (void)stream;
     launches++;
-    printf("kernel %s\n", name_of(func));
-    fflush(stdout);
+    const char* name = name_of(func);
+    // A kernel this build knows how to do natively gets done; the rest are
+    // still counted and named, which is what the enumeration needed.
+    int handled = vvstub_run_kernel(name, args);
+    if (!handled) unhandled++;
+    if (vvstub_trace || !handled) {
+        printf("kernel %s%s\n", handled ? "[done] " : "", name);
+        fflush(stdout);
+    }
     return 0;
 }
 

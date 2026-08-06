@@ -17,6 +17,10 @@
 extern int vvstub_trace;
 void vvstub_note(const char* name);
 
+// Implemented in cudakernels.c: does the kernel natively when it knows how,
+// and answers 0 when it does not.
+int vvstub_run_kernel(const char* name, void** args);
+
 #define VVSTUB(name)                          \
     int name();                               \
     int name() {                              \

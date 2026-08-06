@@ -66,7 +66,7 @@ echo "== compiling"
 for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libcudnn.so.8 libcufft.so.11; do
     base=$(echo "$lib" | sed 's/\.so\..*//')
     extra=""
-    [ "$base" = libcudart ] && extra="src/cudastub.c"
+    [ "$base" = libcudart ] && extra="src/cudastub.c src/cudakernels.c"
 
     # The real CUDA libraries version their symbols, and the provider's
     # references carry those versions: `cudaMalloc@libcudart.so.12`.  A stand-in

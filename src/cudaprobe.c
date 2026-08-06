@@ -42,6 +42,18 @@ static int check(OrtStatus* st, const char* what) {
 }
 
 int main(int argc, char** argv) {
+    // `--cpu` runs the same model on the CPU provider instead.  That is the
+    // reference a shim has to reproduce: same inputs, same numbers, and a diff
+    // is the test.
+    int use_cpu = 0;
+    for (int i = 1; i < argc; i++)
+        if (strcmp(argv[i], "--cpu") == 0) {
+            use_cpu = 1;
+            for (int j = i; j < argc - 1; j++) argv[j] = argv[j + 1];
+            argc--;
+            i--;
+        }
+
     const char* ort_path = argc > 1 ? argv[1] : "/opt/vv/libvoicevox_onnxruntime.so.1.17.3";
     const char* model = argc > 2 ? argv[2] : "/opt/vv/predict_duration.onnx";
 
@@ -70,15 +82,19 @@ int main(int argc, char** argv) {
     step("CreateSessionOptions");
     if (check(g_api->CreateSessionOptions(&opts), "CreateSessionOptions")) return 1;
 
-    // The CUDA provider, through the plain C entry point the build exports.
-    step("append the CUDA execution provider");
-    OrtStatus* (*append_cuda)(OrtSessionOptions*, int) =
-        dlsym(h, "OrtSessionOptionsAppendExecutionProvider_CUDA");
-    if (!append_cuda) {
-        printf("FAIL  this build has no CUDA provider\n");
-        return 1;
+    if (use_cpu) {
+        printf("      (--cpu: the reference run)\n");
+    } else {
+        // The CUDA provider, through the plain C entry point the build exports.
+        step("append the CUDA execution provider");
+        OrtStatus* (*append_cuda)(OrtSessionOptions*, int) =
+            dlsym(h, "OrtSessionOptionsAppendExecutionProvider_CUDA");
+        if (!append_cuda) {
+            printf("FAIL  this build has no CUDA provider\n");
+            return 1;
+        }
+        if (check(append_cuda(opts, 0), "AppendExecutionProvider_CUDA")) return 1;
     }
-    if (check(append_cuda(opts, 0), "AppendExecutionProvider_CUDA")) return 1;
 
     step("CreateSession  <- the provider initialises here");
     OrtSession* session = NULL;
@@ -127,8 +143,22 @@ int main(int argc, char** argv) {
     if (st) {
         printf("      Run: %s\n", g_api->GetErrorMessage(st));
         g_api->ReleaseStatus(st);
-    } else {
-        printf("ok    Run\n");
+        return 1;
+    }
+    printf("ok    Run\n");
+
+    // The numbers, which are the whole point of having a reference run: the
+    // CPU provider's output is what a shim has to reproduce.
+    {
+        float* out = NULL;
+        OrtTensorTypeAndShapeInfo* info = NULL;
+        size_t count = 0;
+        g_api->GetTensorMutableData(v_out[0], (void**)&out);
+        g_api->GetTensorTypeAndShape(v_out[0], &info);
+        g_api->GetTensorShapeElementCount(info, &count);
+        printf("out   %zu values\n", count);
+        for (size_t i = 0; i < count && i < 16; i++) printf("      [%zu] %.6f\n", i, out[i]);
+        g_api->ReleaseTensorTypeAndShapeInfo(info);
     }
 
     printf("CUDAPROBE DONE\n");
