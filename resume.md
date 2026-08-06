@@ -87,12 +87,24 @@ does *not* have these changes.
 ## What is unfinished
 
 1. **Speed.** This is the whole story now. The interpreter retires tens of
-   millions of instructions a second; ORT wants billions. The page cache in
-   `host_ptr` bought about 25 % on a memory-bound guest. The next honest step is
-   a JIT, which is a different project. Cheaper things that might still be worth
-   measuring: an instruction-fetch cursor so decoding does not re-resolve the
-   code page per byte, and `census()` becoming a plain global rather than a
-   function-local static checked on every instruction.
+   millions of instructions a second; ORT wants billions.
+
+   What helped: the direct-mapped page cache in `Memory::host_ptr`, worth about
+   25 % on a memory-bound guest (memtest 8m03s -> 6m23s).
+
+   What did **not**, measured against a build of the previous commit, runs
+   interleaved: replacing the prefix decoder's ten-deep `if` chain with a switch
+   and hoisting `census()` out of a function-local static. Three interleaved
+   rounds of `probe`, which is about four seconds of real interpretation:
+   5927/5969/5817 ms before, 5949/6033/5848 ms after. Nothing, or slightly
+   worse. Both changes are kept because they are clearer, not because they are
+   faster - and the useful part is the negative result: **the per-instruction
+   cost is not in the prefix chain or the static guard**, so the next person
+   should look at the decode/execute switch and the operand helpers, or accept
+   that the answer is a JIT.
+
+   Untried and still plausible: an instruction-fetch cursor so decoding does not
+   re-resolve the code page for every byte.
 2. **CPUID says SSE2 only**, so ORT takes its slowest kernels. Advertising
    SSSE3/SSE4/AVX2 would cut the instruction count a great deal, but every one
    of those instructions then has to be right - and `isatest.c` is exactly the
