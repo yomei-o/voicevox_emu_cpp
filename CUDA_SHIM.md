@@ -96,6 +96,21 @@ against the real libraries, and it works: the CUDA provider comes up, the model
 decrypts, and the audio is audible. So the shim has an unambiguous target rather
 than an argument.
 
+**The CPU and the GPU agree exactly.** `predict_duration.onnx` answers with the
+same sixteen values to every digit printed, from the CPU provider on a desktop
+and the CUDA provider on a T4 - two paths that share no arithmetic:
+
+    1.129583  0.202718  0.191819  0.100126  0.061151  0.043386  0.070718 ...
+
+They are in `colab/predict_duration_reference.txt`. That is the shim's target,
+and it is not a matter of opinion: a shim that gets these is right, one that does
+not is wrong, and the index of the first disagreement says where to look.
+
+Where the shim stands against it today: the convolutions are implemented and
+running, `_UnaryElementWise` and `ExpandKernel2D` are done, and the output is
+structured but wrong - `_GatherKernel`, `_ConcatKernel` and `cublasSgeam` are
+still returning success without doing anything.
+
 And the audio it makes is the audio everything else here makes. The same
 utterance, through four very different machines:
 

@@ -1,0 +1,34 @@
+# What predict_duration.onnx answers, and what the CUDA shim has to reproduce.
+#
+# Inputs are the ones src/cudaprobe.c uses: phoneme_list = [0..15] taken modulo
+# 40, speaker_id = [0].  Output is `phoneme_length`, 16 values.
+#
+# These came out identical - to every digit printed - from two places that share
+# no arithmetic:
+#
+#   the CPU execution provider, on this machine
+#   the CUDA execution provider, on a Colab Tesla T4
+#
+# So the target is not a matter of opinion.  A shim that gets these is right;
+# one that does not is wrong, and the index of the first disagreement says where
+# to look.  Compare with:
+#
+#   LD_LIBRARY_PATH=. ./cudaprobe ./libvoicevox_onnxruntime.so.1.17.3 \
+#       ./predict_duration.onnx | grep '^      \['
+#
+1.129583
+0.202718
+0.191819
+0.100126
+0.061151
+0.043386
+0.070718
+0.105660
+0.057060
+0.075692
+0.094905
+0.056463
+0.070642
+0.081746
+0.106450
+0.072528
