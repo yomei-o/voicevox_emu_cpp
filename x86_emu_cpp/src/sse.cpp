@@ -9,12 +9,31 @@
 // execute_0f() can carry on with the integer forms.
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "cpu.h"
 
 namespace x86emu {
 namespace {
+
+// X86EMU_AES_COUNT reports at exit how many AES-NI instructions actually ran.
+// It is the cheapest way to tell "the decrypt never happened" from "the decrypt
+// happened and something after it is wrong", and it costs an increment when the
+// guest is doing AES at all - which no guest that is not doing AES ever is.
+struct AesCensus {
+    unsigned long long imc = 0, enc = 0, enclast = 0, dec = 0, declast = 0, keygen = 0;
+    ~AesCensus() {
+        if (!std::getenv("X86EMU_AES_COUNT")) return;
+        std::fprintf(stderr,
+                     "[aes] aesimc=%llu aesenc=%llu aesenclast=%llu aesdec=%llu "
+                     "aesdeclast=%llu aeskeygenassist=%llu\n",
+                     imc, enc, enclast, dec, declast, keygen);
+        std::fflush(stderr);
+    }
+};
+AesCensus g_aes;
 
 // The prefix that selects between the four variants of an SSE opcode.
 enum class Sel { None, P66, PF3, PF2 };
@@ -1108,18 +1127,23 @@ bool Cpu::execute_sse(uint8_t op) {
                 switch (op3) {
                     case 0xDB:  // AESIMC: the equivalent-inverse key schedule
                         r = aes_inv_mix_columns(s);
+                        ++g_aes.imc;
                         break;
                     case 0xDC:  // AESENC
                         r = aes_xor(aes_mix_columns(aes_sub_shift(d, false)), s);
+                        ++g_aes.enc;
                         break;
                     case 0xDD:  // AESENCLAST - the final round omits MixColumns
                         r = aes_xor(aes_sub_shift(d, false), s);
+                        ++g_aes.enclast;
                         break;
                     case 0xDE:  // AESDEC
                         r = aes_xor(aes_inv_mix_columns(aes_sub_shift(d, true)), s);
+                        ++g_aes.dec;
                         break;
                     default:    // 0xDF, AESDECLAST
                         r = aes_xor(aes_sub_shift(d, true), s);
+                        ++g_aes.declast;
                         break;
                 }
                 xmm[modrm_reg_] = r;
@@ -1174,6 +1198,7 @@ bool Cpu::execute_sse(uint8_t op) {
                 r.d[1] = rot_word(sub_word(s.d[1])) ^ rcon;
                 r.d[2] = sub_word(s.d[3]);
                 r.d[3] = rot_word(sub_word(s.d[3])) ^ rcon;
+                ++g_aes.keygen;
                 xmm[modrm_reg_] = r;
                 return true;
             }

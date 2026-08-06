@@ -3,6 +3,60 @@
 Working notes. The README says what this *is*; this says what is unfinished and
 what is known about it. Written 2026-08-06.
 
+## What changed on 2026-08-06, second session: a reference appeared
+
+Work moved to an **x86-64 Windows machine with WSL2 Ubuntu 22.04**, which the
+notes below (written on ARM64 Windows, no Linux anywhere) did not have. Three
+things follow, and together they turn the open problem from a hunt into a diff.
+
+- **The guest works natively.** Built with WSL's gcc and run on Linux directly:
+  load 0.6 s, tts 1.5 s, a 69676-byte WAV. The model, the runtime and the API
+  sequence are sound on *this* machine too, not only on the old one's Windows
+  control.
+- **The guest works under `qemu-x86_64`** — same binary, same committed Debian
+  sysroot, `qemu-x86_64 -L sysroot sysroot/opt/vv/tts ...`: load 6.4 s, tts
+  517 s, the same WAV. So an emulator *can* do this, and `tools/qemu-diff/` now
+  has a reference it can actually produce.
+- **`x86emu` fails identically to before**, so nothing about the old machine
+  was involved.
+
+Guests no longer need clang and a cross-sysroot: WSL's gcc builds them natively
+(`gcc -O2 -o tts tts.c -L. -lvoicevox_core -Wl,-rpath,/opt/vv`). `build.sh` is
+still the portable path.
+
+### Two hypotheses died, cheaply
+
+**AES-NI is not involved at all.** `sse.cpp` now counts AES-NI executions and
+prints them at exit under `X86EMU_AES_COUNT=1`. Across the whole failing run:
+
+    [aes] aesimc=0 aesenc=0 aesenclast=0 aesdec=0 aesdeclast=0 aeskeygenassist=0
+
+Not one. The decrypt does not use AES-NI here, which also explains why adding
+it changed nothing — and qemu, whose default CPU has no AES bit either, decrypts
+the model fine. The AES-NI work stays because it is correct and tested, but it
+is not on this path.
+
+**The allocator is not corrupting the model.** `src/memtest.c` builds the same
+shape of buffer the model is read into — 64 KB grown by `realloc` to 64 MB,
+which above `mmap_threshold` makes every step the mremap-then-fall-back path —
+plus a flat 58 MB allocation, 64 concurrent mmap chunks freed out of order, and
+the model file itself read into a realloc-grown buffer and checksummed. Under
+the emulator all of it passes, and the realloc-grown copy of `0.vvm` hashes to
+`fbd5370b3d46e74d`, the same as the file. So mmap/munmap/copy on a 58 MB region
+is not dropping or duplicating anything.
+
+### Which leaves a wrong instruction, and now there is an oracle for it
+
+Control flow and I/O are ruled out; the bytes going in are right; the allocator
+is right. What is left is that some instruction computes the wrong answer — the
+same shape of bug as the `MOVHLPS` one that `x86_emu_cpp`'s notes record. Two
+routes, both now open:
+
+1. `tools/qemu-diff/` as designed, with `qemu-x86_64` as the reference.
+2. A differential instruction test — run the same instructions under qemu and
+   under `x86emu` and compare. Cheaper than a multi-gigabyte trace and it
+   pinpoints the opcode rather than the address.
+
 ## Start here
 
     sh setup.sh        # unpack, build the emulator, build the guests
