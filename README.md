@@ -201,9 +201,16 @@ different project.
 
 ## Requirements
 
-- a C++17 compiler for the emulator (MSVC 2022 and gcc both build it)
+- a C++17 compiler for the emulator. `setup.sh` uses `g++` when there is one and
+  CMake with MSVC when there is not, which on Windows is the ordinary case.
+  `vcvars` is never involved — on the machine this was written on it hangs.
 - to build the guests: WSL's gcc, or clang with `ld.lld` (set `CLANG=`)
 - to build the browser demo: emscripten (set `EMCC=`)
+- to check the emulator against a reference: a Linux x86-64 machine with
+  `qemu-x86_64`, which WSL provides
+
+Every script in the repository has been run end to end on a Windows machine with
+MSVC, WSL and emscripten — which is how three of them turned out not to work.
 
 ## Terms
 
