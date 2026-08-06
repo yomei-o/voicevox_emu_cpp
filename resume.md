@@ -147,14 +147,31 @@ does *not* have these changes.
    conversion fix above, so its output may not be trustworthy. Text analysis is
    verified in a real browser, against both a local server and the deployed
    Pages site (`node tools/browser_test.mjs [--url ...]`).
-6. **The guest needs `/tmp`.** Absent, `voicevox_open_jtalk_rc_use_user_dict`
+7. **The guest needs `/tmp`.** Absent, `voicevox_open_jtalk_rc_use_user_dict`
    fails with `USE_USER_DICT_ERROR` - Open JTalk compiles a user dictionary
    through a temporary file. `sysroot/tmp/.keep` carries the directory, and
    `make_sysroot.sh` and the browser worker both create it. Found by running
    `apitest --no-audio` through the emulator, which is what that flag is for.
 4. **`voicevox_onnxruntime_init_once`** is stubbed: this build of CORE loads
    ONNX Runtime rather than linking it, so the header does not declare it.
-5. **Threads are avoided, not solved.** `cpu_num_threads = 1`,
+5. **The browser pays the model load again for every utterance**, because
+   `emu_run_path` runs a guest to completion and the page starts a fresh one
+   each time. Twenty-three minutes, every click. The interesting thing this
+   blocks is not audio - the vocoder is hours either way - but
+   `voicevox_synthesizer_create_audio_query`, which runs only the two small
+   models and would answer in seconds once the sessions exist. Text in, real
+   phoneme durations and pitches out, interactively, from the real models.
+
+   What it needs: a persistent `Emulator` behind the wasm API rather than one
+   per call, and fd 0 backed by a buffer JS can push into. The guest half
+   already exists - `vvagent` speaks exactly this protocol over stdin/stdout,
+   and the host library drives it through a pipe today. The awkward part is
+   "run until the guest blocks on an empty read and hand control back to JS":
+   `FileTable::read` already answers `kEAGAINPipe` for an empty pipe with a
+   writer, so the shape is there, but the retry currently spins inside `run()`
+   instead of unwinding. Worth doing deliberately, not at 2 a.m. with a working
+   demo on the line.
+6. **Threads are avoided, not solved.** `cpu_num_threads = 1`,
    `ORT_SEQUENTIAL`, `allow_spinning=0`. No `clone` has appeared in any trace.
 
 ## Things that cost time, so they are written down
