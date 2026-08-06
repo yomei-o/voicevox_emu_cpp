@@ -56,7 +56,10 @@ pre.term {
 }
 .note { font-size: .9rem; color: var(--dim); }
 .warn { color: var(--warn); }
-table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+/* Narrow screens: a table scrolls inside its own box rather than pushing the
+   page sideways. */
+.scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; min-width: 25rem; }
 th, td { text-align: left; padding: .45rem .55rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { color: var(--dim); font-weight: 600; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -103,7 +106,7 @@ VOICEVOX の音声モデルは暗号化されていて、パッチの当たっ�
     <b>数時間かかります</b>。これはその手順をこのマシンで最後まで走らせて出てきた
     WAV です —— 手を加えていない、エミュレータの出力そのものです。
   </p>
-  <table style="margin-bottom:.5rem">
+  <div class="scroll"><table style="margin-bottom:.5rem">
     <tr><th>テキスト</th><th>音</th><th class="num">かかった時間</th><th class="num">ネイティブとの差</th></tr>
     <tr>
       <td>あ<br><span class="note">0.52 秒</span></td>
@@ -117,7 +120,7 @@ VOICEVOX の音声モデルは暗号化されていて、パッチの当たっ�
       <td class="num">復号 545 秒<br>推論 7077 秒</td>
       <td class="num">最大 7 / 12988<br>0.054%</td>
     </tr>
-  </table>
+  </table></div>
   <p class="note" style="margin:.6rem 0 0">
     「ネイティブとの差」は、同じテキストを Linux 上の同じ公式バイナリで合成したものと
     サンプル単位で比べた最大差です。ピークに対して 0.1% 未満 —— 聴いて分かる差ではありません。
@@ -183,7 +186,7 @@ VOICEVOX の音声モデルは暗号化されていて、パッチの当たっ�
     ごまかしても仕方がないので、このマシンで測った値をそのまま出します。
     ネイティブは Linux 上の同じ公式バイナリ、エミュレータは同じマシンの x86emu です。
   </p>
-  <table>
+  <div class="scroll"><table>
     <tr>
       <th>やること</th>
       <th class="num">ネイティブ</th>
@@ -195,7 +198,7 @@ VOICEVOX の音声モデルは暗号化されていて、パッチの当たっ�
     <tr><td>モデルの復号＋セッション初期化</td><td class="num">0.6 秒</td><td class="num">498 秒</td><td class="num">1210 秒</td></tr>
     <tr><td>推論（0.52 秒の音声）</td><td class="num">0.5 秒</td><td class="num">2498 秒</td><td class="num">1〜2 時間 <span class="note">(推定)</span></td></tr>
     <tr><td>推論（1.45 秒の音声）</td><td class="num">1.5 秒</td><td class="num">7077 秒</td><td class="num">—</td></tr>
-  </table>
+  </table></div>
   <p class="note" style="margin-top:1rem; margin-bottom:0">
     理由は二つ。インタプリタ方式のエミュレータは 1 秒に数千万命令しか実行できません
     （実機は数十億です）。そして CPUID が SSE2 までしか申告しないので、
