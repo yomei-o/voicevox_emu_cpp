@@ -195,10 +195,16 @@ VOICEVOX の音声モデルは暗号化されていて、パッチの当たっ�
     </tr>
     <tr><td>ONNX Runtime が起動するまで</td><td class="num">—</td><td class="num">4 秒</td><td class="num">13 秒</td></tr>
     <tr><td>辞書の読み込み＋テキスト解析</td><td class="num">0.0 秒</td><td class="num">1.0 秒</td><td class="num">1.6 秒</td></tr>
-    <tr><td>モデルの復号＋セッション初期化</td><td class="num">0.6 秒</td><td class="num">498 秒</td><td class="num">1210 秒</td></tr>
-    <tr><td>推論（0.52 秒の音声）</td><td class="num">0.5 秒</td><td class="num">2498 秒</td><td class="num">1〜2 時間 <span class="note">(推定)</span></td></tr>
+    <tr><td>モデルの復号＋セッション初期化</td><td class="num">0.6 秒</td><td class="num">498 秒</td><td class="num">1365 秒</td></tr>
+    <tr><td>推論（0.52 秒の音声）</td><td class="num">0.5 秒</td><td class="num">2498 秒</td><td class="num">5931 秒</td></tr>
     <tr><td>推論（1.45 秒の音声）</td><td class="num">1.5 秒</td><td class="num">7077 秒</td><td class="num">—</td></tr>
   </table></div>
+  <p class="note" style="margin-top:.9rem; margin-bottom:0">
+    「あ」の一言をブラウザの中で最後まで作ると <b>2 時間 3 分・444 億命令</b>でした。
+    毎秒 600 万命令 —— 実機が毎秒数十億命令を実行するのに対して、です。
+    そして出てきた WAV は、同じエミュレータを x86-64 向けにコンパイルしたビルドの
+    出力と<b>ビット単位で完全に一致</b>しました。遅いだけで、答えは同じです。
+  </p>
   <p class="note" style="margin-top:1rem; margin-bottom:0">
     理由は二つ。インタプリタ方式のエミュレータは 1 秒に数千万命令しか実行できません
     （実機は数十億です）。そして CPUID が SSE2 までしか申告しないので、

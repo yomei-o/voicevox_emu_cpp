@@ -148,9 +148,14 @@ The emulator is an interpreter, and this is what that costs:
 | --- | --- | --- | --- | --- |
 | runtime comes up (`probe`) | — | — | 4 s | 13 s |
 | dictionary load + text analysis | 0.0 s | — | 1.0 s | 1.0 s |
-| model decrypt + session init | 0.6 s | 6.4 s | 8-9 min | ~25 min |
-| `tts`, 0.52 s of audio | 0.5 s | — | 42 min | — |
+| model decrypt + session init | 0.6 s | 6.4 s | 8-9 min | 23 min |
+| `tts`, 0.52 s of audio | 0.5 s | — | 42 min | 99 min |
 | `tts`, 1.45 s of audio | 1.5 s | 517 s | 118 min | — |
+
+The whole of "あ" in a browser is 2 h 3 min and **44.4 G instructions** — six
+million a second, against the billions a real CPU manages. And the WAV that
+comes out is **bit-identical** to the one the x86-64 build of the same emulator
+produces. Slow, and the same answer.
 
 And the audio that comes out is the real thing. Against a native run of the same
 text, `tools/wavcmp.mjs` puts the largest sample difference at 3 against a peak
