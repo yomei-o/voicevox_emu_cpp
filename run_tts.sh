@@ -2,7 +2,7 @@
 # Text in, sysroot/opt/vv/out.wav out - through the official CORE, emulated.
 set -e
 cd "$(dirname "$0")"
-EMU=${EMU:-../x86_emu_cpp/x86emu.exe}
+. "$(dirname "$0")/emu_path.sh"
 VVM=${VVM:-0.vvm}
 mkdir -p sysroot/opt/vv
 cp guest/tts guest/libvoicevox_core.so guest/libvoicevox_onnxruntime.so.* "guest/$VVM" sysroot/opt/vv/

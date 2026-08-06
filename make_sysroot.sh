@@ -70,7 +70,7 @@ echo "   $m copies"
 
 # The ELF interpreter every guest names in its PT_INTERP.
 mkdir -p "$ROOT/lib64"
-[ -e "$ROOT/lib64/ld-linux-x86-64.so.2" ] &&
+[ -e "$ROOT/lib64/ld-linux-x86-64.so.2" ] ||
     cp "$ROOT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" "$ROOT/lib64/"
 
 # ORT's cpuinfo parses this and complains to stderr when it is absent.  The
