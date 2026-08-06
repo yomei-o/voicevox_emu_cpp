@@ -73,6 +73,11 @@ mkdir -p "$ROOT/lib64"
 [ -e "$ROOT/lib64/ld-linux-x86-64.so.2" ] ||
     cp "$ROOT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" "$ROOT/lib64/"
 
+# Somewhere for the guest to put a temporary file.  Open JTalk compiles a user
+# dictionary through one, and voicevox_open_jtalk_rc_use_user_dict fails with
+# USE_USER_DICT_ERROR when there is nowhere to put it.
+mkdir -p "$ROOT/tmp"
+
 # ORT's cpuinfo parses this and complains to stderr when it is absent.  The
 # flags are the ones the emulator's CPUID actually advertises.
 mkdir -p "$ROOT/proc"

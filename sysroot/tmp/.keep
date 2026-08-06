@@ -1,0 +1,6 @@
+# The guest needs somewhere to put a temporary file.
+#
+# Open JTalk compiles a user dictionary through a temporary file, and
+# voicevox_open_jtalk_rc_use_user_dict fails with USE_USER_DICT_ERROR when there
+# is nowhere to put one - which is what an absent /tmp looks like from inside.
+# Git will not carry an empty directory, hence this file.

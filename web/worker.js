@@ -113,6 +113,14 @@ async function startModule() {
         post({type: 'out', fd, text: decoder.decode(bytes, {stream: true})});
     globalThis.x86emuLog = (line) => post({type: 'out', fd: 2, text: '[emu] ' + line + '\n'});
 
+    // Somewhere for the guest to put a temporary file.  Nothing the demo runs
+    // needs one today, but the guest half of the API does - Open JTalk compiles
+    // a user dictionary through /tmp - and an absent directory is a confusing
+    // way to find that out.
+    try {
+        Module.FS.mkdirTree(SYSROOT + '/tmp');
+    } catch (e) { /* already there */ }
+
     setSysroot(SYSROOT);
 }
 
