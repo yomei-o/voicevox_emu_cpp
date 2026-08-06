@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>VOICEVOX CORE をブラウザの中のエミュレータで動かす</title>
+<title>公式 VOICEVOX CORE を、ブラウザの中の x86-64 エミュレータで動かす</title>
 <style>
 :root {
   color-scheme: light dark;
-  --bg: #fbfaf8; --fg: #1c1b19; --dim: #6b6862; --line: #e0dcd4;
+  --bg: #fbfaf8; --fg: #1c1b19; --dim: #6b6862; --line: #e2ded6;
   --card: #ffffff; --accent: #2f7d5e; --accent-fg: #ffffff;
   --term-bg: #f3f1ec; --warn: #8a5a00;
 }
@@ -15,54 +15,55 @@
   :root {
     --bg: #14150f; --fg: #eceada; --dim: #9a9788; --line: #2e3025;
     --card: #1b1d16; --accent: #7ac6a0; --accent-fg: #10120c;
-    --term-bg: #101208; --warn: #d8b25c;
+    --term-bg: #0e100a; --warn: #d8b25c;
   }
 }
 * { box-sizing: border-box; }
 body {
-  margin: 0; padding: 2rem 1.25rem 4rem;
+  margin: 0; padding: 2.5rem 1.25rem 5rem;
   background: var(--bg); color: var(--fg);
-  font: 16px/1.75 system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+  font: 16px/1.8 system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
 }
-main { max-width: 46rem; margin: 0 auto; }
-h1 { font-size: 1.55rem; line-height: 1.35; margin: 0 0 .5rem; letter-spacing: .01em; }
-h2 { font-size: 1.05rem; margin: 2.5rem 0 .75rem; letter-spacing: .02em; }
+main { max-width: 47rem; margin: 0 auto; }
+h1 { font-size: 1.6rem; line-height: 1.4; margin: 0 0 .75rem; letter-spacing: .01em; }
+h2 { font-size: 1.05rem; margin: 2.75rem 0 .8rem; letter-spacing: .03em; }
+h2 .step { color: var(--dim); font-weight: 400; margin-right: .5rem; }
 p { margin: 0 0 1rem; }
-.lede { color: var(--dim); margin-bottom: 2rem; }
+.lede { color: var(--dim); margin-bottom: 2rem; font-size: 1.02rem; }
 .card {
   background: var(--card); border: 1px solid var(--line);
-  border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem;
+  border-radius: 11px; padding: 1.25rem 1.35rem; margin-bottom: 1rem;
 }
 button {
-  font: inherit; font-weight: 600; padding: .6rem 1.25rem; border-radius: 7px;
+  font: inherit; font-weight: 600; padding: .6rem 1.3rem; border-radius: 8px;
   border: 1px solid transparent; background: var(--accent); color: var(--accent-fg);
   cursor: pointer;
 }
-button:disabled { opacity: .4; cursor: default; }
-button.secondary { background: transparent; color: var(--fg); border-color: var(--line); }
-input[type=text], select {
-  font: inherit; padding: .55rem .7rem; border-radius: 7px;
+button:disabled { opacity: .38; cursor: default; }
+button.secondary { background: transparent; color: var(--fg); border-color: var(--line); font-weight: 500; }
+input[type=text] {
+  font: inherit; padding: .6rem .75rem; border-radius: 8px; width: 100%;
   border: 1px solid var(--line); background: var(--bg); color: var(--fg);
 }
-input[type=text] { width: 100%; }
-.row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-top: .75rem; }
-.bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin-top: .75rem; }
-.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
-.status { color: var(--dim); font-size: .9rem; margin-top: .5rem; min-height: 1.5em; }
+.row { display: flex; gap: .7rem; align-items: center; flex-wrap: wrap; margin-top: .85rem; }
+.bar { height: 7px; background: var(--line); border-radius: 4px; overflow: hidden; margin-top: .85rem; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+.status { color: var(--dim); font-size: .9rem; margin-top: .55rem; min-height: 1.6em; }
 pre.term {
-  background: var(--term-bg); border: 1px solid var(--line); border-radius: 8px;
-  padding: .9rem 1rem; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
-  white-space: pre-wrap; word-break: break-word; max-height: 22rem; overflow-y: auto;
-  margin: 0;
+  background: var(--term-bg); border: 1px solid var(--line); border-radius: 9px;
+  padding: .9rem 1.05rem; font: 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; word-break: break-all; max-height: 20rem; overflow-y: auto; margin: 0;
 }
 .note { font-size: .9rem; color: var(--dim); }
 .warn { color: var(--warn); }
 table { border-collapse: collapse; width: 100%; font-size: .92rem; }
-th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
+th, td { text-align: left; padding: .45rem .55rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { color: var(--dim); font-weight: 600; }
-td.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 a { color: var(--accent); }
-footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--line); font-size: .88rem; color: var(--dim); }
+footer { margin-top: 3.5rem; padding-top: 1.5rem; border-top: 1px solid var(--line); font-size: .88rem; color: var(--dim); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+.pipe { font: 12.5px/1.9 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); overflow-x: auto; }
 </style>
 </head>
 <body>
@@ -71,87 +72,127 @@ footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--line
 <h1>公式 VOICEVOX CORE を、ブラウザの中の x86-64 エミュレータで動かす</h1>
 
 <p class="lede">
-このページは VOICEVOX を移植していません。<b>公式のバイナリをそのまま</b>、
-1 命令ずつ実行しています。ゲストは Linux x86-64 のプログラムで、
-CPU だけが WebAssembly で書かれたソフトウェアです。
+VOICEVOX を移植したのではありません。<b>公式のバイナリをそのまま</b>、1 命令ずつ実行しています。
+ゲストは Linux x86-64 のプログラムで、CPU だけが WebAssembly で書かれたソフトウェアです。
 </p>
 
 <p>
-VOICEVOX の音声モデルは暗号化されていて、パッチの当たった
-<code>voicevox_onnxruntime</code> だけが開けます。だから「自前で書き直した推論エンジン」
-ではどうやっても声は出ません。この方法はその逆で、
-<b>公式のランタイムに、公式のやり方で仕事をさせます</b>。逆コンパイルも抽出もしません。
+VOICEVOX の音声モデルは暗号化されていて、パッチの当たった <code>voicevox_onnxruntime</code>
+だけが開けます。だから推論エンジンを自前で書き直しても、声は出せません。
+この方法はその逆で、<b>公式のランタイムに、公式のやり方で仕事をさせます</b>。
+逆コンパイルも抽出もしていません。
 </p>
 
-<h2>1. 材料を取ってくる</h2>
 <div class="card">
-  <p class="note" style="margin-bottom:.5rem">
-    ONNX Runtime、CORE、ずんだもんの音声モデル、Open JTalk 辞書、
-    そして Debian の glibc 一式を、エミュレータの中のファイルシステムに置きます。
-    <b>合計およそ 105 MB のダウンロード</b>（展開後 190 MB）。一度きりです。
-  </p>
-  <button id="prepare">材料をダウンロード</button>
-  <div class="bar"><i id="bar"></i></div>
-  <div class="status" id="prep-status">まだ何も読み込んでいません</div>
+<div class="pipe">
+ブラウザ → WebAssembly の x86-64 エミュレータ → 本物の ld-linux-x86-64.so.2<br>
+&nbsp;&nbsp;→ libvoicevox_core.so → libvoicevox_onnxruntime.so → 音声
+</div>
 </div>
 
-<h2>2. しゃべらせる</h2>
+<h2><span class="step">1</span>テキスト解析を試す</h2>
 <div class="card">
-  <input type="text" id="text" value="あ" spellcheck="false">
+  <p class="note" style="margin-bottom:.6rem">
+    VOICEVOX の前半分。Open JTalk が辞書を読み、モーラ・アクセント位置・音素を出します。
+    ニューラルネットは動かないので<b>数秒で終わります</b>。
+    ダウンロードは <b>約 33 MB</b>（glibc・CORE・辞書）。
+  </p>
+  <button id="prep-analyze">材料をダウンロード (33 MB)</button>
+  <div class="bar"><i id="bar-analyze"></i></div>
+  <div class="status" id="status-analyze">まだ何も読み込んでいません</div>
   <div class="row">
-    <label class="note">プリセット</label>
-    <button class="secondary" data-preset="あ">あ（最短）</button>
+    <input type="text" id="text-analyze" value="ずんだもんなのだ" spellcheck="false">
+  </div>
+  <div class="row">
+    <button id="go-analyze" disabled>解析する</button>
+    <span class="note" id="analyze-time"></span>
+  </div>
+  <pre class="term" id="analyze-out" style="margin-top:1rem; display:none"></pre>
+</div>
+
+<h2><span class="step">2</span>しゃべらせる</h2>
+<div class="card">
+  <p class="note" style="margin-bottom:.6rem">
+    VOICEVOX の後ろ半分。音声モデルを復号し、ONNX Runtime のセッションを作り、
+    ニューラルボコーダを回します。<b class="warn">ここはとても遅いです</b> —
+    デスクトップのネイティブ版エミュレータで、モデルの読み込みに 8 分、
+    「あ」の一言に 42 分かかりました。ブラウザの中ではさらにかかります。
+    追加ダウンロードは <b>約 76 MB</b>（ONNX Runtime と音声モデル）。
+  </p>
+  <button id="prep-speak" class="secondary">材料をダウンロード (+76 MB)</button>
+  <div class="bar"><i id="bar-speak"></i></div>
+  <div class="status" id="status-speak">まだ何も読み込んでいません</div>
+  <div class="row">
+    <input type="text" id="text-speak" value="あ" spellcheck="false">
+  </div>
+  <div class="row">
+    <button class="secondary" data-preset="あ">あ</button>
     <button class="secondary" data-preset="こんにちは">こんにちは</button>
     <button class="secondary" data-preset="ずんだもんなのだ">ずんだもんなのだ</button>
+    <span class="note">スタイル</span>
+    <input type="text" id="style" value="3" style="width:4.5rem">
   </div>
   <div class="row">
-    <label class="note" for="style">スタイル ID</label>
-    <input type="text" id="style" value="3" style="width:5rem">
-    <button id="speak" disabled>合成する</button>
+    <button id="go-speak" disabled>合成する（数時間かかります）</button>
   </div>
-  <div class="status" id="run-status"></div>
-  <div id="player" style="margin-top:1rem"></div>
+  <div class="status" id="status-run"></div>
+  <div id="player" style="margin-top:.75rem"></div>
 </div>
 
 <h2>ゲストの出力</h2>
 <pre class="term" id="term">（まだ動いていません）</pre>
 
-<h2>どのくらい時間がかかるのか</h2>
+<h2>どのくらい遅いのか</h2>
 <div class="card">
   <p class="note">
-    正直に言うと、<b>とても遅い</b>です。ネイティブなら 2 秒で終わることを、
-    インタプリタ方式のエミュレータは何千倍もかけてやります。
-    この数字はごまかしても仕方がないので、そのまま出します。
+    ごまかしても仕方がないので、このマシンで測った値をそのまま出します。
+    ネイティブは Linux 上の同じ公式バイナリ、エミュレータは同じマシンの x86emu です。
   </p>
-  <table id="timing">
-    <tr><th>やること</th><th class="num">ネイティブ</th><th class="num">エミュレータ<br>(デスクトップ実測)</th></tr>
-    <tr><td>ONNX Runtime のロード</td><td class="num">0.0 秒</td><td class="num">4 秒</td></tr>
-    <tr><td>Open JTalk 辞書のロード</td><td class="num">0.0 秒</td><td class="num">0.2 秒</td></tr>
-    <tr><td>音声モデルの復号とセッション初期化</td><td class="num">0.6 秒</td><td class="num">約 8 分</td></tr>
-    <tr><td>推論（音声の長さに比例）</td><td class="num">1.5 秒</td><td class="num">下の実測を参照</td></tr>
+  <table>
+    <tr>
+      <th>やること</th>
+      <th class="num">ネイティブ</th>
+      <th class="num">エミュレータ</th>
+      <th class="num">ブラウザ<br>(wasm)</th>
+    </tr>
+    <tr><td>ONNX Runtime が起動するまで</td><td class="num">—</td><td class="num">4 秒</td><td class="num">13 秒</td></tr>
+    <tr><td>辞書の読み込み＋テキスト解析</td><td class="num">0.0 秒</td><td class="num">1.0 秒</td><td class="num">1.0 秒</td></tr>
+    <tr><td>モデルの復号＋セッション初期化</td><td class="num">0.6 秒</td><td class="num">498 秒</td><td class="num">約 25 分 <span class="note">(推定)</span></td></tr>
+    <tr><td>推論（0.52 秒の音声）</td><td class="num">0.5 秒</td><td class="num">2498 秒</td><td class="num">数時間 <span class="note">(推定)</span></td></tr>
   </table>
-  <p class="note" style="margin-top:1rem">
-    ブラウザの中ではこれよりさらに遅くなります。<b>タブを開いたまま待てる人向け</b>です。
-    短い言葉ほど速く終わるので、まずは「あ」から試すのをおすすめします。
+  <p class="note" style="margin-top:1rem; margin-bottom:0">
+    理由は二つ。インタプリタ方式のエミュレータは 1 秒に数千万命令しか実行できません
+    （実機は数十億です）。そして CPUID が SSE2 までしか申告しないので、
+    ONNX Runtime は一番遅いカーネルを選びます。
+    <b>速くするには JIT が要り、それは別のプロジェクトです。</b>
   </p>
 </div>
 
-<h2>これは何をしているのか</h2>
+<h2>出てくる音は本物と同じか</h2>
 <div class="card">
   <p class="note" style="margin:0">
-    ブラウザ → WebAssembly の x86-64 エミュレータ → 本物の
-    <code>ld-linux-x86-64.so.2</code> → <code>libvoicevox_core.so</code> →
-    <code>libvoicevox_onnxruntime.so</code>。
-    動的リンク、IFUNC の解決、C++ の静的初期化子、そして ONNX Runtime のセッション初期化まで、
-    全部エミュレートされた命令の上で起きています。
-    同じエミュレータの上に <code>voicevox_core</code> と同じ C API も実装してあり、
-    そちらはネイティブのプログラムから普通に呼べます。
+    同じです。「あ」を両方で合成して比べると、25132 バイトの WAV のうち
+    サンプルの最大差は <b>3</b>（ピーク 3912 に対して 0.077%）、RMS 差は 0.0078% でした。
+    完全一致しないのは、<code>RSQRTPS</code> と <code>RCPPS</code> が定義からして
+    <i>近似</i>命令で、実機は 12 ビット程度、このエミュレータは正確に計算するからです
+    ——どちらも仕様の範囲内で、聴いて分かる差ではありません。
+  </p>
+</div>
+
+<h2>ネイティブから使うなら</h2>
+<div class="card">
+  <p class="note" style="margin:0">
+    同じエミュレータの上に <code>voicevox_core</code> と<b>同じ C API</b> を実装してあります。
+    公式の <code>voicevox_core.h</code> の 63 関数を、同じシグネチャ・同じ意味で。
+    本家の代わりに <code>voicevox_core.dll</code> をリンクすれば、
+    CORE のビルドが存在しないマシンでもそのコードが動きます。
+    このページの音声も、その API を通して作られたものです。
   </p>
 </div>
 
 <footer>
   音声を利用する場合は <b>VOICEVOX:ずんだもん</b> のクレジット表記が必要です。
-  詳しくは <a href="https://zunko.jp/con_ongen_kiyaku.html">音源利用規約</a> を参照してください。
+  詳しくは <a href="https://zunko.jp/con_ongen_kiyaku.html">音源利用規約</a> を参照してください。<br>
   ソース: <a href="https://github.com/yomei-o/voicevox_emu_cpp">yomei-o/voicevox_emu_cpp</a>
 </footer>
 
@@ -163,6 +204,7 @@ const term = $('term');
 let termText = '';
 let worker = null;
 let payload = null;
+let currentPrep = null;
 
 function log(text) {
   if (termText === '') term.textContent = '';
@@ -171,70 +213,136 @@ function log(text) {
   term.scrollTop = term.scrollHeight;
 }
 
-function bytes(n) {
-  return n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : (n / 1e3).toFixed(0) + ' kB';
+const mb = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : (n / 1e3).toFixed(0) + ' kB';
+
+function mins(s) {
+  return s < 90 ? s.toFixed(1) + ' 秒' : (s / 60).toFixed(1) + ' 分';
 }
 
-function startWorker() {
+async function ensureWorker() {
+  if (worker) return;
+  payload = await (await fetch('payload.json')).json();
   worker = new Worker('worker.js');
+  worker.postMessage({type: 'payload', payload});
   worker.onmessage = (e) => {
     const m = e.data;
     if (m.type === 'status') {
-      $('prep-status').textContent = m.text;
+      if (currentPrep) $('status-' + currentPrep).textContent = m.text;
     } else if (m.type === 'progress') {
+      if (!currentPrep) return;
       const pct = m.total ? Math.min(100, (m.done / m.total) * 100) : 0;
-      $('bar').style.width = pct + '%';
-      $('prep-status').textContent =
-        `${bytes(m.done)} / ${bytes(m.total)} (${pct.toFixed(0)}%)`;
+      $('bar-' + currentPrep).style.width = pct + '%';
+      $('status-' + currentPrep).textContent =
+        `${mb(m.done)} / ${mb(m.total)} (${pct.toFixed(0)}%)`;
     } else if (m.type === 'out') {
       log(m.text);
     } else if (m.type === 'ready') {
-      $('bar').style.width = '100%';
-      $('prep-status').textContent = '準備完了 — 合成できます';
-      $('speak').disabled = false;
-      $('prepare').disabled = true;
+      ready[m.group] = true;
+      $('bar-' + m.group).style.width = '100%';
+      $('status-' + m.group).textContent = '準備完了';
+      $('go-' + m.group).disabled = false;
+      $('prep-' + m.group).disabled = true;
+      currentPrep = null;
+      if (readyResolve && readyResolve.group === m.group) {
+        readyResolve.resolve();
+        readyResolve = null;
+      }
     } else if (m.type === 'done') {
-      const blob = new Blob([m.wav], {type: 'audio/wav'});
-      const url = URL.createObjectURL(blob);
-      $('player').innerHTML =
-        `<audio controls autoplay src="${url}"></audio>
-         <div class="note">${bytes(m.wav.length)} の WAV を
-         ${m.seconds.toFixed(1)} 秒で生成
-         （${(m.instructions / 1e9).toFixed(2)} G 命令）
-         — <a download="zundamon.wav" href="${url}">ダウンロード</a></div>`;
-      $('run-status').textContent = '完了';
-      $('speak').disabled = false;
+      if (m.mode === 'analyze') {
+        $('analyze-out').style.display = 'block';
+        $('analyze-out').textContent = pretty(lastAnalyzeOutput);
+        $('analyze-time').textContent =
+          `${mins(m.seconds)}（${(m.instructions / 1e6).toFixed(0)} M 命令）`;
+        $('go-analyze').disabled = false;
+      } else {
+        const url = URL.createObjectURL(new Blob([m.wav], {type: 'audio/wav'}));
+        $('player').innerHTML =
+          `<audio controls autoplay src="${url}"></audio>
+           <div class="note">${mb(m.wav.length)} の WAV を ${mins(m.seconds)}で生成
+           （${(m.instructions / 1e9).toFixed(2)} G 命令）
+           — <a download="zundamon.wav" href="${url}">ダウンロード</a></div>`;
+        $('status-run').textContent = '完了';
+        $('go-speak').disabled = false;
+      }
     } else if (m.type === 'error') {
       log('\n*** ' + m.text + '\n');
-      $('run-status').innerHTML = '<span class="warn">失敗しました — 上の出力を見てください</span>';
-      $('speak').disabled = false;
+      $('status-run').innerHTML = '<span class="warn">失敗しました — ゲストの出力を見てください</span>';
+      if (!ready.analyze) $('prep-analyze').disabled = false;
+      if (!ready.speak) $('prep-speak').disabled = false;
+      $('go-analyze').disabled = !ready.analyze;
+      $('go-speak').disabled = !ready.speak;
+      if (readyResolve) {
+        readyResolve.reject(new Error(m.text));
+        readyResolve = null;
+      }
+      currentPrep = null;
     }
   };
 }
 
-$('prepare').onclick = async () => {
-  $('prepare').disabled = true;
-  if (!worker) startWorker();
-  if (!payload) payload = await (await fetch('payload.json')).json();
-  worker.postMessage({type: 'prepare', payload});
+// analyze prints one JSON line; keep the last one so it can be shown pretty.
+let lastAnalyzeOutput = '';
+function pretty(s) {
+  try {
+    return JSON.stringify(JSON.parse(s.trim()), null, 2);
+  } catch (e) {
+    return s;
+  }
+}
+
+// One group at a time, and each call settles when the worker says it is ready.
+const ready = {};
+let readyResolve = null;
+
+function prepare(group) {
+  if (ready[group]) return Promise.resolve();
+  $('prep-' + group).disabled = true;
+  currentPrep = group;
+  return ensureWorker().then(() => new Promise((resolve, reject) => {
+    readyResolve = {group, resolve, reject};
+    worker.postMessage({type: 'prepare', group});
+  }));
+}
+
+$('prep-analyze').onclick = () => prepare('analyze').catch(() => {});
+$('prep-speak').onclick = async () => {
+  // Synthesis needs the dictionary and CORE too, so that group comes first.
+  try {
+    await prepare('analyze');
+    await prepare('speak');
+  } catch (e) { /* the error message is already on the page */ }
 };
 
-$('speak').onclick = () => {
-  $('speak').disabled = true;
+$('go-analyze').onclick = () => {
+  $('go-analyze').disabled = true;
+  $('analyze-time').textContent = '解析中…';
+  termText = '';
+  term.textContent = '';
+  lastAnalyzeOutput = '';
+  const collect = (e) => {
+    if (e.data.type === 'out' && e.data.fd === 1) lastAnalyzeOutput += e.data.text;
+  };
+  worker.addEventListener('message', collect);
+  setTimeout(() => worker.removeEventListener('message', collect), 600000);
+  worker.postMessage({type: 'run', mode: 'analyze', text: $('text-analyze').value});
+};
+
+$('go-speak').onclick = () => {
+  $('go-speak').disabled = true;
   $('player').innerHTML = '';
-  $('run-status').textContent = '合成中 — 進み具合はゲストの出力に出ます。時間がかかります。';
+  $('status-run').textContent =
+    '合成中 — 進み具合はゲストの出力に出ます。タブを閉じないでください。';
   termText = '';
   term.textContent = '';
   worker.postMessage({
-    type: 'speak',
-    text: $('text').value,
+    type: 'run', mode: 'speak',
+    text: $('text-speak').value,
     style: parseInt($('style').value, 10) || 3,
-    out: '/opt/vv/out.wav',
   });
 };
 
 for (const b of document.querySelectorAll('[data-preset]'))
-  b.onclick = () => { $('text').value = b.dataset.preset; };
+  b.onclick = () => { $('text-speak').value = b.dataset.preset; };
 </script>
 </body>
 </html>

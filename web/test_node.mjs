@@ -5,8 +5,9 @@
 // covered here - and a failure prints a stack trace instead of vanishing into
 // a worker.
 //
-//   node web/test_node.mjs probe          # ~1 minute: does the runtime come up
-//   node web/test_node.mjs tts あ          # the whole thing, and slow
+//   node web/test_node.mjs probe            # does the runtime come up
+//   node web/test_node.mjs analyze こんにちは  # text analysis, seconds
+//   node web/test_node.mjs tts あ            # the whole thing, and slow
 //
 // It reads the payload straight out of the working tree, so run setup.sh (or at
 // least unpack.sh) first.
@@ -61,6 +62,10 @@ const libs = [
 ];
 for (const [g, h] of libs) put(g, path.join(root, h));
 put('/opt/vv/' + what, path.join(root, 'guest', what));
+if (what === 'analyze') {
+    putTree('/opt/vv/open_jtalk_dic_utf_8-1.11',
+            path.join(root, 'guest/open_jtalk_dic_utf_8-1.11'));
+}
 if (what === 'tts') {
     put('/opt/vv/0.vvm', path.join(root, 'guest/0.vvm'));
     putTree('/opt/vv/open_jtalk_dic_utf_8-1.11',
@@ -69,10 +74,13 @@ if (what === 'tts') {
 
 mod.ccall('emu_set_sysroot', null, ['string'], [SYSROOT]);
 
-const args = what === 'tts'
-    ? ['/opt/vv/tts', '/opt/vv/libvoicevox_onnxruntime.so.1.17.3',
-       '/opt/vv/open_jtalk_dic_utf_8-1.11', '/opt/vv/0.vvm', text, style, '/opt/vv/out.wav']
-    : ['/opt/vv/probe', '/opt/vv/libvoicevox_onnxruntime.so.1.17.3'];
+const args =
+    what === 'tts'
+        ? ['/opt/vv/tts', '/opt/vv/libvoicevox_onnxruntime.so.1.17.3',
+           '/opt/vv/open_jtalk_dic_utf_8-1.11', '/opt/vv/0.vvm', text, style, '/opt/vv/out.wav']
+        : what === 'analyze'
+            ? ['/opt/vv/analyze', '/opt/vv/open_jtalk_dic_utf_8-1.11', text]
+            : ['/opt/vv/probe', '/opt/vv/libvoicevox_onnxruntime.so.1.17.3'];
 
 const enc = new TextEncoder();
 const parts = args.map((a) => enc.encode(a));
