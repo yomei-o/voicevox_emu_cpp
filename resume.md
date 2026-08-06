@@ -5,14 +5,20 @@ what is known about it. Written 2026-08-06.
 
 ## Start here
 
-    sh setup.sh        # emulator, sysroot, runtime, model, dictionary, guests
+    sh setup.sh        # unpack, build the emulator, build the guests
     sh run_probe.sh    # ~10 s, should end "PROBE OK"
     sh run_tts.sh      # gets to load_voice_model and fails - that is the open problem
 
-`setup.sh` needs `curl`, `tar`, `ar`, `xz`, and a clang with `ld.lld` beside it
-(LLVM 19 here; set `CLANG=`). It needs no Linux host: this was all done on
-**ARM64 Windows**, where even the x64 tooling is running under Windows' own
-emulation.
+A clone is self-contained: the runtime, the core, the voice model, the
+dictionary and a Debian sysroot are all committed, and `setup.sh` downloads
+nothing. All it needs is a clang with `ld.lld` beside it (LLVM 19 here; set
+`CLANG=` if it is elsewhere) and a C++17 compiler for the emulator. No Linux
+host: this was all done on **ARM64 Windows**, where even the x64 tooling is
+running under Windows' own emulation.
+
+`make_sysroot.sh` and `fetch_models.sh` are kept for reproducing or changing
+the payload — a different voice model is `VVM=5.vvm sh fetch_models.sh` — and
+are not part of an ordinary clone.
 
 ## The one open problem
 
@@ -200,10 +206,35 @@ critical path.
 - Non-ASCII on the command line is not worth the encoding risk; `tts.c` has the
   default text compiled in as UTF-8.
 
-## The vendored emulator
+## The vendored emulator, and the merge-back policy
 
 `x86_emu_cpp/` here is a copy of the sibling project, carrying the `statx` and
-AES-NI changes. `setup.sh` prefers a built `../x86_emu_cpp/x86emu.exe` if there
-is one, so on the machine that has both, the sibling checkout is the source of
-truth and this copy is for anyone who clones only this repository. **Changes to
-the emulator should go upstream too** — they are not voicevox-specific.
+AES-NI changes.
+
+**Work on the emulator here. Merge it back upstream at the end, once the whole
+thing works.** Chasing the decrypt is going to mean several rounds of
+instrumenting the interpreter, and most of that instrumentation will be thrown
+away; upstreaming it round by round would put churn into `x86_emu_cpp` for no
+benefit. So this copy is the working tree for now, and the merge back is a
+single deliberate step after `run_tts.sh` produces audio.
+
+None of the changes are voicevox-specific — `statx` and AES-NI are plain gaps
+in an x86-64 emulator, and whatever the decrypt turns out to need will be too —
+so all of it belongs upstream eventually.
+
+When merging back:
+
+- `src/cpu.cpp` — CPUID leaf 1 ECX bits 1 and 25
+- `src/sse.cpp` — the AES-NI helpers and the `0F 38 DB..DF` / `0F 3A DF` /
+  `0F 3A 44` decode
+- `src/syscalls.cpp` — `Sys::Statx`, syscall 332 and i386 383
+- `src/syscalls_files.inc` — `write_statx`, the `Statx` case, the EFAULT guard
+  in `Newfstatat`
+- `tests/aes/aesni.c` — new, and worth wiring into `tests/run_tests.sh`
+
+`setup.sh` prefers a built `../x86_emu_cpp/x86emu.exe` when a sibling checkout
+exists, which on the development machine means **the sibling is what actually
+runs**. Keep the two in step while working, or delete the sibling binary so
+the vendored one is used and there is no doubt about which is being tested.
+The sibling checkout at `C:\prog\claude\x86_emu_cpp` currently holds the same
+changes, uncommitted.
