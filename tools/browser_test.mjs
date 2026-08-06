@@ -213,6 +213,23 @@ try {
         await waitFor(`!!document.querySelector('#player audio')`, 8 * 3600 * 1000,
                       'the audio');
         check(true, 'synthesis produces a WAV the page can play');
+        // Pull the bytes back out so the run leaves evidence rather than a
+        // claim: the page holds them in a blob: URL its own audio element uses.
+        const b64 = await evaluate(`(async () => {
+            const src = document.querySelector('#player audio').src;
+            const buf = await (await fetch(src)).arrayBuffer();
+            let s = '';
+            const b = new Uint8Array(buf);
+            for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+            return btoa(s);
+        })()`);
+        const wav = Buffer.from(b64, 'base64');
+        fs.writeFileSync(path.join(root, 'browser_out.wav'), wav);
+        console.log(`     wrote browser_out.wav, ${wav.length} bytes`);
+        check(wav.length > 44 && wav.slice(0, 4).toString() === 'RIFF',
+              'the WAV is a real RIFF file');
+        const took = await evaluate(`document.querySelector('#player .note').textContent`);
+        console.log(`     ${took.replace(/\s+/g, ' ').trim()}`);
     }
 
     check(consoleErrors.length === 0, 'no console errors');

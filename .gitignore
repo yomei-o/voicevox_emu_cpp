@@ -39,3 +39,4 @@ web_out.wav
 web/guest/probe
 guest/analyze
 build/isatest_*.txt
+browser_out.wav
