@@ -547,6 +547,28 @@ bool Cpu::execute_sse(uint8_t op) {
             }
             return true;
         }
+        case 0x52:
+        case 0x53: {  // RSQRTPS / RSQRTSS / RCPPS / RCPSS
+            // These are the *approximate* reciprocal instructions: hardware
+            // answers them to about twelve bits and the exact value differs
+            // between CPU generations, so the architecture only bounds the
+            // relative error at 1.5 * 2^-12.  Computing them exactly in single
+            // precision sits well inside that, and every caller either refines
+            // with a Newton step or does not care - which is why MLAS reaches
+            // for them in the first place.
+            if (sel == Sel::P66 || sel == Sel::PF2) return false;  // no double form
+            RM rm = decode_modrm();
+            auto approx = [op](float v) {
+                return op == 0x52 ? 1.0f / std::sqrt(v) : 1.0f / v;
+            };
+            if (sel == Sel::PF3) {
+                xmm[modrm_reg_].f32[0] = approx(to_float(xmm_read_d(rm)));
+            } else {
+                Xmm s = xmm_read(rm);
+                for (int i = 0; i < 4; ++i) xmm[modrm_reg_].f32[i] = approx(s.f32[i]);
+            }
+            return true;
+        }
         case 0x54:
         case 0x55:
         case 0x56:
