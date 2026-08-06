@@ -37,14 +37,20 @@ cp guest/libvoicevox_core.so guest/libvoicevox_onnxruntime.so.* "guest/$VVM" sys
 export MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1
 
 # Where the host library finds the emulator and the guest's filesystem.
-export VOICEVOX_EMU_ROOT="$PWD"
-[ -n "$VOICEVOX_EMU_EMULATOR" ] || for cand in \
-        "$PWD/x86_emu_cpp/build/Release/x86emu.exe" \
-        "$PWD/x86_emu_cpp/x86emu.exe" \
-        "$PWD/x86_emu_cpp/x86emu"; do
-    [ -x "$cand" ] && { VOICEVOX_EMU_EMULATOR=$cand; break; }
+#
+# These are read by a *Windows* program, so they have to be Windows paths.  MSYS
+# normally rewrites them on the way out, but MSYS_NO_PATHCONV above - which the
+# guest's own arguments need - turns that off for everything, so convert them
+# here.  Without this the library is handed /c/prog/... and reports, quite
+# correctly, that there is no emulator there.
+win() { cygpath -m "$1" 2>/dev/null || echo "$1"; }
+
+for cand in x86_emu_cpp/build/Release/x86emu.exe x86_emu_cpp/x86emu.exe x86_emu_cpp/x86emu; do
+    [ -x "$cand" ] && { found=$cand; break; }
 done
-export VOICEVOX_EMU_EMULATOR
+[ -n "$VOICEVOX_EMU_EMULATOR" ] || VOICEVOX_EMU_EMULATOR=$(win "$PWD/$found")
+[ -n "$VOICEVOX_EMU_ROOT" ] || VOICEVOX_EMU_ROOT=$(win "$PWD")
+export VOICEVOX_EMU_EMULATOR VOICEVOX_EMU_ROOT
 echo "emulator: $VOICEVOX_EMU_EMULATOR"
 
 VVSAY=./vvsay.exe
