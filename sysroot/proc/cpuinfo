@@ -1,0 +1,10 @@
+processor	: 0
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 42
+model name	: x86emu
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2
+cache size	: 256 KB
+siblings	: 1
+cpu cores	: 1
+

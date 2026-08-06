@@ -51,13 +51,19 @@ cause. `resume.md` has the four controls that corner it and where to look next.
 
 ## Getting there
 
-    sh setup.sh          # emulator, sysroot, runtime, model, dictionary, guests
+    sh setup.sh          # unpack, build the emulator, build the guests
     sh run_probe.sh
     sh run_tts.sh
 
-No Linux host and no WSL: `make_sysroot.sh` unpacks Debian's own amd64
-packages, so an **ARM64 Windows** machine builds and runs an x86-64 Linux
-guest. Which is what this was developed on.
+**A clone is self-contained.** The runtime, the core, ずんだもん's voice model,
+the Open JTalk dictionary and a Debian sysroot are all here; `setup.sh`
+downloads nothing. See `licenses/README.md` for what is redistributed under
+what terms — all of it permits redistribution, and the voice models require a
+credit (`VOICEVOX:ずんだもん`).
+
+No Linux host and no WSL is involved at any point: the sysroot is unpacked
+Debian amd64 packages, so an **ARM64 Windows** machine builds and runs an
+x86-64 Linux guest. Which is what this was developed on.
 
 ## Layout
 
@@ -65,15 +71,14 @@ guest. Which is what this was developed on.
 | --- | --- |
 | `src/probe.c` | does the runtime load and initialise at all? Optionally loads a plain `.onnx`. |
 | `src/tts.c` | the whole thing: text in, `out.wav` out, timed per step. Also builds for Windows, as the control. |
-| `setup.sh` | the four steps below, in order |
-| `make_sysroot.sh` | builds `sysroot/` from Debian bookworm `.deb`s |
-| `fetch_models.sh` | the ONNX Runtime, the core, a voice model, the dictionary |
+| `setup.sh` | unpack, build the emulator, build the guests |
+| `unpack.sh` | expands `guest/open_jtalk_dic_utf_8-1.11.tar.gz` (23 MB committed, 107 MB on disk) |
+| `sysroot/`, `guest/` | the committed payload — Debian glibc/libstdc++, and the VOICEVOX binaries and model |
+| `make_sysroot.sh` | rebuilds `sysroot/` from Debian bookworm `.deb`s. Not needed for a clone. |
+| `fetch_models.sh` | re-fetches the runtime, core, a different voice model, the dictionary. Not needed for a clone. |
 | `build.sh` | cross-compiles both guests with clang + lld |
 | `run_probe.sh`, `run_tts.sh` | run them under the emulator |
 | `x86_emu_cpp/` | a copy of the emulator, carrying the `statx` and AES-NI changes |
-
-Nothing here is redistributable: the scripts fetch the runtime, the models and
-the dictionary from their own sources, and none of it is committed.
 
 ## Requirements
 
@@ -84,11 +89,13 @@ the dictionary from their own sources, and none of it is committed.
 
 ## Terms
 
-The voice models are covered by their own terms, separate from CORE's MIT
-licence, and those terms forbid reverse engineering. Running the runtime is
-its intended use and is not that. Reading the decrypted model back out of
-guest memory would be, and this project does not do it — the emulator's
-`--dump` is pointed at nothing here for a reason.
+`licenses/README.md` has the full table. The short version: everything
+committed here permits redistribution, and audio produced with a VOICEVOX
+voice library must be credited — `VOICEVOX:ずんだもん` and the like. See
+<https://zunko.jp/con_ongen_kiyaku.html>.
 
-Audio produced with a VOICEVOX voice library must be credited, e.g.
-`VOICEVOX:ずんだもん`. See <https://zunko.jp/con_ongen_kiyaku.html>.
+What the voice-model terms *do* forbid is 「逆コンパイル・リバースエンジニア
+リング及びこれらの方法の公開すること」. Running the runtime is its intended use
+and is not that. Reading a decrypted model back out of guest memory would be,
+and this project does not do it — the emulator's `--dump` is pointed at
+nothing here for a reason.

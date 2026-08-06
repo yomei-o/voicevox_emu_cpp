@@ -1,12 +1,16 @@
-# Nothing fetched or built is committed: the runtime, the models and the
-# dictionary all come from their own sources, under their own terms.
+# Downloads and unpacking scratch: make_sysroot.sh and fetch_models.sh use
+# these, but the tree they produce is committed, so a clone needs neither.
 dl/
 debs/
-guest/
-sysroot/
-*.wav
-src/voicevox_core.h
-src/onnxruntime_c_api.h
+
+# Build products.
 x86_emu_cpp/x86emu
 x86_emu_cpp/x86emu.exe
+x86_emu_cpp/gen_elf_tests
+x86_emu_cpp/gen_elf_tests.exe
 x86_emu_cpp/tests/aes/aesni_elf64
+guest/open_jtalk_dic_utf_8-1.11/
+guest/probe
+guest/tts
+sysroot/opt/
+*.wav

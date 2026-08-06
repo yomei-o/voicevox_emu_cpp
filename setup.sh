@@ -1,31 +1,31 @@
 #!/bin/sh
-# One command to get from a fresh clone to a runnable tree.
+# From a fresh clone to a runnable tree.  Downloads nothing: the runtime, the
+# core, the voice model, the dictionary and a Debian sysroot are all in the
+# repository (see licenses/README.md for what is redistributed under what).
 #
-#   sh setup.sh          # emulator, sysroot, models, guests
+#   sh setup.sh          # unpack, build the emulator, build the guests
 #   sh run_probe.sh      # does the runtime come up?      (~10 s)
-#   sh run_tts.sh        # the whole thing                (slow, see resume.md)
+#   sh run_tts.sh        # the whole thing                (see resume.md)
 #
-# Nothing fetched here is in the repository.  The voice models in particular
-# are covered by terms that forbid redistribution, so they are downloaded from
-# VOICEVOX rather than committed; the same script keeps the runtime, the
-# dictionary and a 3.4 MB slice of Debian out of the clone as a side effect.
+# To change the voice model or refresh the runtime, use fetch_models.sh; to
+# rebuild the sysroot from Debian's packages, make_sysroot.sh.  Neither is
+# needed for an ordinary clone.
 set -e
 cd "$(dirname "$0")"
 
-echo "=== 1/4  emulator"
+echo "=== 1/3  unpacking the payload"
+sh unpack.sh
+
+echo "=== 2/3  emulator"
 if [ -x ../x86_emu_cpp/x86emu.exe ] || [ -x ../x86_emu_cpp/x86emu ]; then
     echo "    using the sibling checkout at ../x86_emu_cpp"
+elif [ -x x86_emu_cpp/x86emu.exe ] || [ -x x86_emu_cpp/x86emu ]; then
+    echo "    already built"
 else
     (cd x86_emu_cpp && sh build.sh)
 fi
 
-echo "=== 2/4  sysroot (Debian bookworm amd64)"
-sh make_sysroot.sh
-
-echo "=== 3/4  runtime, core, voice model, dictionary"
-sh fetch_models.sh "${VVM:-0.vvm}"
-
-echo "=== 4/4  guests"
+echo "=== 3/3  guests"
 sh build.sh
 
 echo

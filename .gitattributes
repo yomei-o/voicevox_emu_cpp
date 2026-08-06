@@ -1,0 +1,9 @@
+# The payload and the sysroot are binaries: never touch their line endings.
+* -text
+*.md text
+*.sh text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.inc text eol=lf
+*.cpp text eol=lf
+*.txt text
