@@ -47,6 +47,7 @@ WAVs this machine produced and says exactly what they cost.
 
     node web/test_page.mjs        # the page's own path, in node
     node tools/browser_test.mjs   # the page, in a headless browser
+    node tools/browser_test.mjs --url https://yomei-o.github.io/voicevox_emu_cpp/web/
 
 ### What it took
 

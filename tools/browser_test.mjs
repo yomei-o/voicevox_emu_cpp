@@ -8,7 +8,12 @@
 //
 //   node tools/browser_test.mjs
 //   node tools/browser_test.mjs --speak     # also runs synthesis: hours
+//   node tools/browser_test.mjs --url https://yomei-o.github.io/voicevox_emu_cpp/web/
 //   BROWSER="C:/path/to/msedge.exe" node tools/browser_test.mjs
+//
+// With --url it tests the deployed site instead of the working tree, which is
+// the only way to find out that Pages is serving a payload file as something
+// the page cannot use.
 //
 // Uses the DevTools protocol directly over node's built-in WebSocket, so there
 // is nothing to install.
@@ -22,6 +27,8 @@ import path from 'node:path';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
 const alsoSpeak = process.argv.includes('--speak');
+const urlArg = process.argv.indexOf('--url');
+const liveUrl = urlArg >= 0 ? process.argv[urlArg + 1] : null;
 
 // Whichever of these actually opens a debugging port wins.  Not every install
 // will: a managed machine can forbid remote debugging by policy, and Chrome
@@ -57,15 +64,20 @@ const server = createServer((req, res) => {
     });
     fs.createReadStream(file).pipe(res);
 });
-await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const url = `http://127.0.0.1:${server.address().port}/web/index.html`;
-console.log(`serving ${root}`);
+let url = liveUrl;
+if (!liveUrl) {
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    url = `http://127.0.0.1:${server.address().port}/web/index.html`;
+    console.log(`serving ${root}`);
+} else {
+    server.close();
+}
 console.log(`page     ${url}`);
 
 // ---- launch it ------------------------------------------------------------
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'vvdemo-'));
-const port = 9222 + (server.address().port % 300);
+const port = 9222 + (process.pid % 300);
 
 async function targetOn(portNo, tries) {
     for (let i = 0; i < tries; i++) {
@@ -213,7 +225,7 @@ try {
 
 ws.close();
 child.kill();
-server.close();
+if (!liveUrl) server.close();
 try {
     fs.rmSync(profile, {recursive: true, force: true});
 } catch (e) { /* windows sometimes holds it briefly */ }
