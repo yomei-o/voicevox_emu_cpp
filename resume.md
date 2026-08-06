@@ -27,8 +27,12 @@ nothing.
 - **The API is complete.** All 63 functions of `voicevox_core.h`. `apitest.c`
   built against the real library and against this one prints the same 45 checks
   and the same values, differing only in a random UUID.
-- **The browser build runs.** `probe` and text analysis both work under
-  WebAssembly; `web/test_page.mjs` rehearses the page's exact path in node.
+- **The browser build runs, all the way to audio.** `tools/browser_test.mjs
+  --speak` drives the demo page in a headless browser, waits out the 85 minutes,
+  pulls the WAV back out of the page and checks it: **identical** to what the
+  x86-64 build of the emulator produces, and within 3 of 3912 of native
+  `libvoicevox_core`. Text analysis there answers in under two seconds.
+  `web/test_page.mjs` rehearses the same path in node without a browser.
 
 ## How the decrypt was found, and why it matters for next time
 
@@ -142,11 +146,9 @@ this project spent a day explaining. `EMU=` still overrides.
    `isatest.c` is the tool that makes it safe. The old reason for keeping the
    bits off still holds too: glibc's IFUNC reads them and picks a different
    `memcpy`, so turning one on is never only about the library you meant.
-3. **The browser demo's synthesis path is unverified end to end** at the time of
-   writing - `web/test_page.mjs speak` was still running, and started before the
-   conversion fix above, so its output may not be trustworthy. Text analysis is
-   verified in a real browser, against both a local server and the deployed
-   Pages site (`node tools/browser_test.mjs [--url ...]`).
+3. *(closed)* The browser demo's synthesis path is verified end to end - see
+   above. Text analysis is verified in a real browser against both a local
+   server and the deployed Pages site (`node tools/browser_test.mjs [--url ...]`).
 7. **The guest needs `/tmp`.** Absent, `voicevox_open_jtalk_rc_use_user_dict`
    fails with `USE_USER_DICT_ERROR` - Open JTalk compiles a user dictionary
    through a temporary file. `sysroot/tmp/.keep` carries the directory, and

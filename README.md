@@ -152,10 +152,12 @@ The emulator is an interpreter, and this is what that costs:
 | `tts`, 0.52 s of audio | 0.5 s | — | 42 min | 99 min |
 | `tts`, 1.45 s of audio | 1.5 s | 517 s | 118 min | — |
 
-The whole of "あ" in a browser is 2 h 3 min and **44.4 G instructions** — six
-million a second, against the billions a real CPU manages. And the WAV that
-comes out is **bit-identical** to the one the x86-64 build of the same emulator
-produces. Slow, and the same answer.
+The whole of "あ" in a browser is **44.4 G instructions** — 85 to 123 minutes
+depending on what else the machine is doing, at some six million instructions a
+second against the billions a real CPU manages. `tools/browser_test.mjs --speak`
+drives the demo page in a headless browser, waits it out, and pulls the WAV back
+out of the page; the bytes it gets are **identical** to the x86-64 build's, and
+within 3 of 3912 of native `libvoicevox_core`. Slow, and the same answer.
 
 And the audio that comes out is the real thing. Against a native run of the same
 text, `tools/wavcmp.mjs` puts the largest sample difference at 3 against a peak
