@@ -114,11 +114,24 @@ does *not* have these changes.
 
    Untried and still plausible: an instruction-fetch cursor so decoding does not
    re-resolve the code page for every byte.
-2. **CPUID says SSE2 only**, so ORT takes its slowest kernels. Advertising
-   SSSE3/SSE4/AVX2 would cut the instruction count a great deal, but every one
-   of those instructions then has to be right - and `isatest.c` is exactly the
-   tool for that now. Note the reason the bits are off today: glibc's IFUNC
-   reads them and switches `memcpy` to code that is not implemented.
+2. **CPUID says SSE2 only.** SSSE3 and SSE4.1 are now *implemented* and checked
+   (isatest, 303 groups, native and wasm both matching a real CPU and qemu), so
+   advertising them is a two-line change rather than a project. It was tried and
+   the bits are still off, because measuring said it buys nothing:
+
+   - with `ECX_SSSE3 | ECX_SSE41` set, `probe`, text analysis and a full
+     synthesis all work;
+   - the WAV that comes out is **bit-identical** to the one the SSE2-only build
+     produces. Not merely close - identical. Which says ONNX Runtime did not
+     change the kernels it runs for this workload;
+   - the timings moved by ±10-15 % in both directions with two other jobs on the
+     machine, i.e. noise.
+
+   So the SSE4.1 bit is not the lever. MLAS's fast paths want **AVX2 and FMA**,
+   which is a much larger implementation job - but a bounded one now, and
+   `isatest.c` is the tool that makes it safe. The old reason for keeping the
+   bits off still holds too: glibc's IFUNC reads them and picks a different
+   `memcpy`, so turning one on is never only about the library you meant.
 3. **The browser demo's synthesis path is unverified end to end** at the time of
    writing - `web/test_page.mjs speak` was still running, and started before the
    conversion fix above, so its output may not be trustworthy. Text analysis is
