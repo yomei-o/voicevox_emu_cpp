@@ -89,16 +89,24 @@ get(f'https://github.com/VOICEVOX/voicevox_vvm/releases/download/{VV_VVM}/{VVM}'
 get('https://raw.githubusercontent.com/yomei-o/voicevox_emu_cpp/main/guest/open_jtalk_dic_utf_8-1.11.tar.gz', 'ojdic.tar.gz')
 
 !tar xzf ort.tgz && unzip -oq core.zip && tar xzf ojdic.tar.gz
-!cp voicevox_onnxruntime-linux-x64-cuda-{VV_ORT}/lib/*.so* .
-!cp voicevox_core-linux-x64-{VV_CORE}/lib/libvoicevox_core.so .
-!cp voicevox_core-linux-x64-{VV_CORE}/include/voicevox_core.h .
+
+# Unpacked with Python rather than a `!` line, because a `!` line's {name}
+# substitution cannot be relied on: when it does not happen the command runs
+# with the braces still in it, `cp` quietly copies nothing, and the failure
+# surfaces much later as "cannot open shared object file".
+import glob, shutil
+for src in glob.glob(f'voicevox_onnxruntime-linux-x64-cuda-{VV_ORT}/lib/*.so*'):
+    shutil.copy2(src, '.')
+shutil.copy2(f'voicevox_core-linux-x64-{VV_CORE}/lib/libvoicevox_core.so', '.')
+shutil.copy2(f'voicevox_core-linux-x64-{VV_CORE}/include/voicevox_core.h', '.')
 
 # A short dictionary means the download was cut off, and that only shows up
 # much later as an unhelpful failure inside Open JTalk.
-import os
 assert os.path.exists('open_jtalk_dic_utf_8-1.11/sys.dic'), 'dictionary incomplete'
 print('sys.dic', f"{os.path.getsize('open_jtalk_dic_utf_8-1.11/sys.dic'):,}", 'bytes')
-!ls -la *.so* {VVM} | head
+for f in sorted(glob.glob('*.so*')) + [VVM]:
+    print(f'{os.path.getsize(f):>12,}  {f}')
+assert os.path.exists(f'libvoicevox_onnxruntime.so.{VV_ORT}'), 'the runtime did not land here'
 """),
 
 md("""
@@ -163,13 +171,28 @@ assert os.path.exists('cudaprobe') and os.path.exists('cudavvm'), 'compile faile
 """),
 
 code("""
+# Everything from here runs through subprocess rather than a `!` line.  A `!`
+# line substitutes {name} and $name from the notebook's namespace, and when that
+# does not happen the command arrives with the braces still in it - which is a
+# confusing way to be told a variable was not in scope.
+ORT_SO = f'./libvoicevox_onnxruntime.so.{VV_ORT}'
+
+def run(cmd, tail=25):
+    r = subprocess.run(cmd, capture_output=True, text=True, env=dict(os.environ))
+    out = (r.stdout or '').strip().splitlines()
+    print(chr(10).join(out[-tail:]))
+    if r.returncode != 0:
+        print('--- exit', r.returncode, '| stderr ---')
+        print((r.stderr or '')[-1500:])
+    return r
+
 print('================ CPU provider (the arithmetic everyone agrees on)')
-!LD_LIBRARY_PATH=$LD_LIBRARY_PATH ./cudaprobe ./libvoicevox_onnxruntime.so.{VV_ORT} ./predict_duration.onnx --cpu 2>/dev/null | tail -20
+run(['./cudaprobe', ORT_SO, './predict_duration.onnx', '--cpu'])
 """),
 
 code("""
 print('================ CUDA provider, on the real GPU')
-!LD_LIBRARY_PATH=$LD_LIBRARY_PATH ./cudaprobe ./libvoicevox_onnxruntime.so.{VV_ORT} ./predict_duration.onnx 2>/dev/null | tail -20
+run(['./cudaprobe', ORT_SO, './predict_duration.onnx'])
 """),
 
 md("""
@@ -187,7 +210,7 @@ voice model, and speak. Here it does it for real.
 
 code("""
 print('================ the full pipeline on the GPU')
-!LD_LIBRARY_PATH=$LD_LIBRARY_PATH ./cudavvm ./libvoicevox_onnxruntime.so.{VV_ORT} ./open_jtalk_dic_utf_8-1.11 ./{VVM} 3 2>&1 | grep -v '^kernel ' | tail -25
+r = run(['./cudavvm', ORT_SO, './open_jtalk_dic_utf_8-1.11', f'./{VVM}', '3'], tail=200)
 """),
 
 md("""
@@ -239,8 +262,8 @@ assert os.path.exists('gpusay'), 'gpusay did not compile'
 # cells later.
 for text, out in [('あ', 'gpu_a.wav'), ('ずんだもんなのだ', 'gpu_zundamon.wav')]:
     print('====', out)
-    r = subprocess.run(['./gpusay', f'./libvoicevox_onnxruntime.so.{VV_ORT}',
-                        './open_jtalk_dic_utf_8-1.11', f'./{VVM}', text, '3', out],
+    r = subprocess.run(['./gpusay', ORT_SO, './open_jtalk_dic_utf_8-1.11',
+                        f'./{VVM}', text, '3', out],
                        capture_output=True, text=True, env=dict(os.environ))
     print(r.stdout[-2000:])
     if r.stderr.strip():
