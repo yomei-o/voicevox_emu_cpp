@@ -118,6 +118,13 @@ guest form, and paths that already look guest-absolute are left alone.
 a round trip from minutes into milliseconds — the only practical way to debug 63
 entry points.
 
+`run_vvsay.sh` runs the whole thing end to end and sets the environment the host
+library needs, including the two MSYS variables without which a guest path
+arrives as `C:/Program Files/Git/opt/vv/...`:
+
+    sh build_api.sh
+    sh run_vvsay.sh text_short.txt zundamon.wav
+
 ## Speed, honestly
 
 The emulator is an interpreter, and this is what that costs:
