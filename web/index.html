@@ -235,6 +235,7 @@ async function ensureWorker() {
       $('status-' + currentPrep).textContent =
         `${mb(m.done)} / ${mb(m.total)} (${pct.toFixed(0)}%)`;
     } else if (m.type === 'out') {
+      if (m.fd === 1) lastGuestStdout += m.text;
       log(m.text);
     } else if (m.type === 'ready') {
       ready[m.group] = true;
@@ -250,7 +251,7 @@ async function ensureWorker() {
     } else if (m.type === 'done') {
       if (m.mode === 'analyze') {
         $('analyze-out').style.display = 'block';
-        $('analyze-out').textContent = pretty(lastAnalyzeOutput);
+        $('analyze-out').textContent = pretty(lastGuestStdout);
         $('analyze-time').textContent =
           `${mins(m.seconds)}（${(m.instructions / 1e6).toFixed(0)} M 命令）`;
         $('go-analyze').disabled = false;
@@ -280,8 +281,9 @@ async function ensureWorker() {
   };
 }
 
-// analyze prints one JSON line; keep the last one so it can be shown pretty.
-let lastAnalyzeOutput = '';
+// analyze prints one JSON line on stdout; the run collects it so it can be
+// shown formatted rather than as one very long line.
+let lastGuestStdout = '';
 function pretty(s) {
   try {
     return JSON.stringify(JSON.parse(s.trim()), null, 2);
@@ -318,12 +320,7 @@ $('go-analyze').onclick = () => {
   $('analyze-time').textContent = '解析中…';
   termText = '';
   term.textContent = '';
-  lastAnalyzeOutput = '';
-  const collect = (e) => {
-    if (e.data.type === 'out' && e.data.fd === 1) lastAnalyzeOutput += e.data.text;
-  };
-  worker.addEventListener('message', collect);
-  setTimeout(() => worker.removeEventListener('message', collect), 600000);
+  lastGuestStdout = '';
   worker.postMessage({type: 'run', mode: 'analyze', text: $('text-analyze').value});
 };
 
@@ -334,6 +331,7 @@ $('go-speak').onclick = () => {
     '合成中 — 進み具合はゲストの出力に出ます。タブを閉じないでください。';
   termText = '';
   term.textContent = '';
+  lastGuestStdout = '';
   worker.postMessage({
     type: 'run', mode: 'speak',
     text: $('text-speak').value,
