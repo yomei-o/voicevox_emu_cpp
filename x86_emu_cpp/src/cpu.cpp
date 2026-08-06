@@ -867,13 +867,28 @@ void Cpu::execute_0f() {
             uint64_t count = (from_cl ? regs[RCX] : fetch8()) & (opsize_ == 8 ? 63 : 31);
             uint64_t dst = rm_read(rm, opsize_);
             int bits = opsize_ * 8;
-            if (count > 0 && count < static_cast<uint64_t>(bits)) {
+            if (count == 0) {
+                // A count of zero shifts nothing and touches no flag, but the
+                // destination register is still written - and a 32-bit write
+                // zeroes the upper half.  Returning without writing leaves the
+                // old upper half in place, which is a different 64-bit value.
+                if (rm.is_reg) rm_write(rm, opsize_, dst);
+                return;
+            }
+            if (count < static_cast<uint64_t>(bits)) {
                 uint64_t r = left ? ((dst << count) | (src >> (bits - count)))
                                   : ((dst >> count) | (src << (bits - count)));
                 r &= mask_of(opsize_);
                 set_flag(FLAG_CF, left ? ((dst >> (bits - count)) & 1) != 0
                                        : ((dst >> (count - 1)) & 1) != 0);
                 set_szp(r, opsize_);
+                // OF is defined for a count of one only, and then it says the
+                // sign changed.  For any other count it is undefined and left
+                // alone deliberately.
+                if (count == 1) {
+                    uint64_t sign = 1ull << (bits - 1);
+                    set_flag(FLAG_OF, ((dst ^ r) & sign) != 0);
+                }
                 rm_write(rm, opsize_, r);
             }
             return;

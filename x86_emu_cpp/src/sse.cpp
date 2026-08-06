@@ -591,13 +591,16 @@ bool Cpu::execute_sse(uint8_t op) {
                     case 0x59: pd_op(dst, src, lanes, [](double a, double b) { return a * b; }); break;
                     case 0x5C: pd_op(dst, src, lanes, [](double a, double b) { return a - b; }); break;
                     case 0x5E: pd_op(dst, src, lanes, [](double a, double b) { return a / b; }); break;
-                    // MIN/MAX return the second operand when either is NaN, per
-                    // the hardware definition.
+                    // MIN is "if SRC1 < SRC2 then SRC1 else SRC2", exactly, and
+                    // the "else" carries two cases worth naming: either operand
+                    // NaN gives SRC2, and so does a tie - which is how MINPD
+                    // tells +0.0 from -0.0.  Testing b < a instead returns SRC1
+                    // on a tie, which is wrong for -0.0 and for the NaN in SRC1.
                     case 0x5D: pd_op(dst, src, lanes, [](double a, double b) {
-                                   return (std::isnan(a) || std::isnan(b) || b < a) ? b : a; });
+                                   return a < b ? a : b; });
                                break;
                     default: pd_op(dst, src, lanes, [](double a, double b) {
-                                 return (std::isnan(a) || std::isnan(b) || b > a) ? b : a; });
+                                 return a > b ? a : b; });
                              break;
                 }
             } else {
@@ -607,10 +610,10 @@ bool Cpu::execute_sse(uint8_t op) {
                     case 0x5C: ps_op(dst, src, lanes, [](float a, float b) { return a - b; }); break;
                     case 0x5E: ps_op(dst, src, lanes, [](float a, float b) { return a / b; }); break;
                     case 0x5D: ps_op(dst, src, lanes, [](float a, float b) {
-                                   return (std::isnan(a) || std::isnan(b) || b < a) ? b : a; });
+                                   return a < b ? a : b; });
                                break;
                     default: ps_op(dst, src, lanes, [](float a, float b) {
-                                 return (std::isnan(a) || std::isnan(b) || b > a) ? b : a; });
+                                 return a > b ? a : b; });
                              break;
                 }
             }
@@ -705,11 +708,16 @@ bool Cpu::execute_sse(uint8_t op) {
                     uint64_t lane = width == 2 ? v.w[i] : width == 4 ? v.d[i] : v.q[i];
                     int bits = width * 8;
                     uint64_t out;
+                    // The /reg field picks the direction: /2 PSRLx, /4 PSRAx,
+                    // /6 PSLLx.  Four and six are not interchangeable and were
+                    // swapped here, which made every PSLLQ an arithmetic shift
+                    // right - invisible to a compiler's output and fatal to
+                    // hand-written SIMD.
                     if (sub == 2) {  // logical right
                         out = count >= bits ? 0 : lane >> count;
-                    } else if (sub == 4) {  // left
+                    } else if (sub == 6) {  // left
                         out = count >= bits ? 0 : lane << count;
-                    } else {  // 6: arithmetic right
+                    } else {  // 4: arithmetic right (no quadword form exists)
                         int64_t s = width == 2 ? static_cast<int16_t>(lane)
                                   : width == 4 ? static_cast<int32_t>(lane)
                                                : static_cast<int64_t>(lane);
