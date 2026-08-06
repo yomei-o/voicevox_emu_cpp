@@ -393,7 +393,8 @@ public:
     // collector cycles through mmap/munmap thousands of times, and never
     // reusing an address exhausts the mmap window mid-compilation.
     // `alignment` must be a power of two; VirtualAlloc needs 64 KiB.
-    uint64_t alloc_pages(uint64_t size, uint64_t alignment = 0x1000);
+    uint64_t alloc_pages(uint64_t size, uint64_t alignment = 0x1000,
+                         const std::string& name = std::string());
     // Claims an address range without creating its pages, for a guest that
     // reserves address space and commits parts of it later.  Nothing else will
     // be handed out inside it.

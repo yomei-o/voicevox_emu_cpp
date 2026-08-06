@@ -794,7 +794,8 @@ uint64_t Emulator::heap_alloc(uint64_t size) {
     return addr;
 }
 
-uint64_t Emulator::alloc_pages(uint64_t size, uint64_t alignment) {
+uint64_t Emulator::alloc_pages(uint64_t size, uint64_t alignment,
+                               const std::string& name) {
     uint64_t need = (size + 0xFFF) & ~0xFFFull;
     if (alignment > 0x1000) {
         // Round the frontier up instead of searching the free list: an
@@ -804,7 +805,7 @@ uint64_t Emulator::alloc_pages(uint64_t size, uint64_t alignment) {
         if (mmap_next_ + need > mmap_limit_) return 0;
         uint64_t addr = mmap_next_;
         mmap_next_ += need;
-        mem.map(addr, need);
+        mem.map(addr, need, name);
         mmap_live_[addr] = need;
         return addr;
     }
@@ -825,7 +826,7 @@ uint64_t Emulator::alloc_pages(uint64_t size, uint64_t alignment) {
             mmap_free_[best] = {addr + need, have - need};  // keep the remainder
         else
             mmap_free_.erase(mmap_free_.begin() + static_cast<long>(best));
-        mem.map(addr, need);
+        mem.map(addr, need, name);
         mmap_live_[addr] = need;
         return addr;
     }
@@ -833,7 +834,7 @@ uint64_t Emulator::alloc_pages(uint64_t size, uint64_t alignment) {
     if (mmap_next_ + need > mmap_limit_) return 0;
     uint64_t addr = mmap_next_;
     mmap_next_ += need;
-    mem.map(addr, need);
+    mem.map(addr, need, name);
     mmap_live_[addr] = need;
     return addr;
 }

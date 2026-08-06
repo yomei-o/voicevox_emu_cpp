@@ -272,6 +272,11 @@ bool FileTable::valid(int fd) const {
            (it->second.fp != nullptr || it->second.is_directory || it->second.pipe_end);
 }
 
+std::string FileTable::path_of(int fd) const {
+    auto it = files_.find(fd);
+    return it == files_.end() ? std::string() : it->second.path;
+}
+
 FileTable::Entry* FileTable::get(int fd) {
     auto it = files_.find(fd);
     if (it == files_.end() || it->second.closed) return nullptr;

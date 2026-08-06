@@ -313,6 +313,19 @@ int64_t do_syscall(Emulator& e, Sys sys, const uint64_t a[6]) {
             constexpr uint32_t kMapFixed = 0x10, kMapAnon = 0x20;
             if (len == 0) return -22;  // EINVAL
 
+            // A file mapping is worth naming after the file.  The guest's own
+            // ld.so does the mapping, so this syscall is the last place the name
+            // is known - and without it every library in the memory map, and
+            // every fault inside one, reads only as "mmap".
+            std::string region = "mmap";
+            constexpr uint32_t kMapAnonymous = 0x20;
+            if (!(flags & kMapAnonymous) && fd >= 0 && e.files.valid(fd)) {
+                std::string p = e.files.path_of(fd);
+                size_t slash = p.find_last_of("/\\");
+                if (slash != std::string::npos) p = p.substr(slash + 1);
+                if (!p.empty()) region = "mmap " + p;
+            }
+
             uint64_t target;
             if (flags & kMapFixed) {           // ld.so reserves a span, then drops
                 target = addr;                 // each segment at a fixed sub-address
@@ -324,9 +337,9 @@ int64_t do_syscall(Emulator& e, Sys sys, const uint64_t a[6]) {
                 uint64_t page = target & ~0xFFFull;
                 uint64_t span = (target - page + len + 0xFFF) & ~0xFFFull;
                 e.mem.unmap(page, span);
-                e.mem.map(target, len, "mmap");
+                e.mem.map(target, len, region);
             } else {
-                target = e.alloc_pages(len);   // a fresh region (hint addr ignored)
+                target = e.alloc_pages(len, 0x1000, region);   // a fresh region
                 if (!target) return -12;       // ENOMEM
             }
 

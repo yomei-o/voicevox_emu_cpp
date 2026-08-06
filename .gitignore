@@ -46,3 +46,8 @@ guest/cudaprobe
 guest/cudavvm
 cuda/
 build/api/eigentest*
+
+# The CUDA stand-ins get copied where a Debian with CUDA installed would keep
+# them (see run_cudavvm.sh); they are build products either way.
+sysroot/lib/x86_64-linux-gnu/libcu*.so.*
+sysroot/lib/x86_64-linux-gnu/libcublas*.so.*

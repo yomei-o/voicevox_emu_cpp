@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <unordered_set>
 
 namespace x86emu {
@@ -969,9 +970,18 @@ void Cpu::unsupported(const char* what, uint8_t opcode, uint64_t start_rip) {
             break;
         }
     }
-    char buf[192];
-    std::snprintf(buf, sizeof buf, "unsupported %s 0x%02X at 0x%llX [%s]", what, opcode,
-                  static_cast<unsigned long long>(start_rip), bytes);
+    // Which mapping the address is in.  A bare address says nothing when a
+    // dozen libraries are loaded; the name says whether this is the guest's own
+    // code, the C library, or some third-party .so that wants an instruction
+    // set this emulator does not have.
+    std::string where;
+    for (const auto& r : mem_.regions())
+        if (start_rip >= r.base && start_rip < r.base + r.size) where = r.name;
+
+    char buf[256];
+    std::snprintf(buf, sizeof buf, "unsupported %s 0x%02X at 0x%llX [%s]%s%s", what, opcode,
+                  static_cast<unsigned long long>(start_rip), bytes,
+                  where.empty() ? "" : " in ", where.c_str());
     throw CpuError(start_rip, buf);
 }
 

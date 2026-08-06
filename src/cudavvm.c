@@ -88,7 +88,24 @@ int main(int argc, char** argv) {
     // Everything above only builds sessions.  The kernels of interest launch
     // here, and the ones from the vocoder are the ones that matter.
     step("voicevox_synthesizer_tts  <- every kernel the pipeline uses");
+    // `@path` reads the text from a file.  Passing it as an argument works on
+    // Linux and does not survive the trip through a Windows command line: the
+    // emulator's guest got "あ" as mojibake and the CORE rejected it as invalid
+    // UTF-8, which is the right answer to the wrong bytes.
     const char* text = argc > 5 ? argv[5] : "あ";
+    char text_buf[4096];
+    if (text[0] == '@') {
+        FILE* tf = fopen(text + 1, "rb");
+        if (!tf) {
+            printf("      cannot read text file %s\n", text + 1);
+            return 1;
+        }
+        size_t n = fread(text_buf, 1, sizeof text_buf - 1, tf);
+        fclose(tf);
+        while (n && (text_buf[n - 1] == '\n' || text_buf[n - 1] == '\r')) n--;
+        text_buf[n] = '\0';
+        text = text_buf;
+    }
     const char* out_path = argc > 6 ? argv[6] : "shim.wav";
     VoicevoxTtsOptions topts = voicevox_make_default_tts_options();
     uintptr_t len = 0;
