@@ -144,7 +144,8 @@ VOICEVOX の音声モデルは暗号化されていて、パッチの当たっ�
     VOICEVOX の後ろ半分。音声モデルを復号し、ONNX Runtime のセッションを作り、
     ニューラルボコーダを回します。<b class="warn">ここはとても遅いです</b> —
     デスクトップのネイティブ版エミュレータで、モデルの読み込みに 8 分、
-    「あ」の一言に 42 分かかりました。ブラウザの中ではさらにかかります。
+    「あ」の一言に 42 分かかりました。ブラウザの中ではモデルの読み込みだけで
+    20 分かかります（実測）。
     追加ダウンロードは <b>約 76 MB</b>（ONNX Runtime と音声モデル）。
   </p>
   <button id="prep-speak" class="secondary">材料をダウンロード (+76 MB)</button>
@@ -184,9 +185,10 @@ VOICEVOX の音声モデルは暗号化されていて、パッチの当たっ�
       <th class="num">ブラウザ<br>(wasm)</th>
     </tr>
     <tr><td>ONNX Runtime が起動するまで</td><td class="num">—</td><td class="num">4 秒</td><td class="num">13 秒</td></tr>
-    <tr><td>辞書の読み込み＋テキスト解析</td><td class="num">0.0 秒</td><td class="num">1.0 秒</td><td class="num">1.0 秒</td></tr>
-    <tr><td>モデルの復号＋セッション初期化</td><td class="num">0.6 秒</td><td class="num">498 秒</td><td class="num">約 25 分 <span class="note">(推定)</span></td></tr>
-    <tr><td>推論（0.52 秒の音声）</td><td class="num">0.5 秒</td><td class="num">2498 秒</td><td class="num">数時間 <span class="note">(推定)</span></td></tr>
+    <tr><td>辞書の読み込み＋テキスト解析</td><td class="num">0.0 秒</td><td class="num">1.0 秒</td><td class="num">1.6 秒</td></tr>
+    <tr><td>モデルの復号＋セッション初期化</td><td class="num">0.6 秒</td><td class="num">498 秒</td><td class="num">1210 秒</td></tr>
+    <tr><td>推論（0.52 秒の音声）</td><td class="num">0.5 秒</td><td class="num">2498 秒</td><td class="num">1〜2 時間 <span class="note">(推定)</span></td></tr>
+    <tr><td>推論（1.45 秒の音声）</td><td class="num">1.5 秒</td><td class="num">7077 秒</td><td class="num">—</td></tr>
   </table>
   <p class="note" style="margin-top:1rem; margin-bottom:0">
     理由は二つ。インタプリタ方式のエミュレータは 1 秒に数千万命令しか実行できません
