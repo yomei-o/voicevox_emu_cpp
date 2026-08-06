@@ -190,28 +190,21 @@ this project spent a day explaining. `EMU=` still overrides.
 6. **Threads are avoided, not solved.** `cpu_num_threads = 1`,
    `ORT_SEQUENTIAL`, `allow_spinning=0`. No `clone` has appeared in any trace.
 
-## The Pages site stopped updating, 2026-08-07 ~00:36 JST
+## The Pages site fell five hours behind, and what got it moving
 
-Every file it serves carries the same `Last-Modified: 06 Aug 2026 15:36:22 GMT`,
-so the whole site is one deployment, and four pushes after it produced no new
-one. The version published is functional - it has the conversion fix - so this
-is untidy rather than broken, but the demo page and `web/x86emu.js` there are
-behind the repository.
+After a stretch of rapid pushes the site stopped publishing: every file it
+served carried the same `Last-Modified`, and five pushes over five hours
+produced no new deployment, while the repository moved on.
 
-The likely cause is Pages' **ten builds an hour** limit: this project pushed far
-more than that while the fixes were landing, and builds over the limit are
-dropped rather than queued. Pushes were batched afterwards. What to check:
+An **empty commit did not help** - which makes sense, since its tree is
+identical to its parent's and there is nothing new to publish. A push that
+actually changed a file did, and it published everything at once.
 
-- the repository's **Actions** tab, for failed "pages build and deployment" runs
-  (a failure leaves the previous deployment serving, which is exactly this);
-- **Settings -> Pages**, that the source is still "Deploy from a branch:
-  main / (root)";
-- a single push after an hour of quiet, to see whether it publishes.
-
-If it turns out to be size rather than rate - the site is 244 MB, of which the
-demo needs about 112 MB - the fix is an Actions workflow that uploads only
-`web/`, `guest/` and the seven libraries `web/payload.json` names. That changes
-the Pages source setting, so it is not something to do without asking.
+So the working rule is: **if Pages looks stuck, push a real change, not an empty
+commit.** Whether the underlying cause was the ten-builds-an-hour limit expiring
+at about the same moment, or the unchanged tree being skipped, is not something
+this could distinguish from outside - the Actions tab would say. Either way,
+batching pushes is the thing that avoids it.
 
 ## Things that cost time, so they are written down
 
