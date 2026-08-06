@@ -89,6 +89,28 @@ numerous (291 tensor descriptors for one utterance) and trivial.
 
 Eigen does all of these.
 
+## The reference, on real hardware
+
+`colab/voicevox_cuda_reference.ipynb` runs the same two programs on a Colab T4
+against the real libraries, and it works: the CUDA provider comes up, the model
+decrypts, and the audio is audible. So the shim has an unambiguous target rather
+than an argument.
+
+Four things went wrong getting there, and all four failed in a way that pointed
+somewhere else. They are written down because each would cost an hour again:
+
+| what happened | what it looked like |
+| --- | --- |
+| a `!` line's `{name}` substitution did not happen, so `cp` copied nothing | `cannot open shared object file`, several cells later |
+| the provider is linked against cuDNN **8**, a current Colab ships 9 | `libcudnn.so.8: cannot open shared object file` |
+| Colab's toolkit can be newer than its driver | `CUDA failure 35: driver version is insufficient` |
+| **setting `LD_LIBRARY_PATH` instead of adding to it hid `/usr/lib64-nvidia`** | the same error 35 - with no driver at all, `cudaDriverGetVersion` answers 0 |
+
+The last one is the one to remember: error 35 reads as a version mismatch and is
+also what "there is no driver on the path" looks like. The cell that asks
+`cudaRuntimeGetVersion` and `cudaDriverGetVersion` directly settled it in one
+line, after three wrong guesses.
+
 ## So: is it a weekend or a year?
 
 Neither, but far closer to the first than the 4757 kernels suggested. The
