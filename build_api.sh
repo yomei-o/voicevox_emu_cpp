@@ -9,9 +9,10 @@
 # A program written against the official `voicevox_core.h` links the host
 # library instead and runs unchanged.
 #
-#   sh build_api.sh              # both halves
+#   sh build_api.sh              # both halves, and the example programs
 #   sh build_api.sh guest        # just the guest
-#   sh build_api.sh host         # just the host
+#   sh build_api.sh host         # just the host library
+#   sh build_api.sh demos        # just vvsay and apitest
 #
 # The guest needs a cross compiler for x86-64 Linux: clang with lld as in
 # build.sh, or - if this machine has WSL - the gcc inside it, which is simpler
@@ -72,12 +73,49 @@ build_host() {
     esac
 }
 
+# The two programs the README tells you to run.  They are ordinary users of the
+# official header: nothing in them knows about an emulator.
+build_demos() {
+    echo "== example programs"
+    case "$(uname -s)" in
+        MINGW* | MSYS* | CYGWIN*)
+            VC=${VC:-C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.31.31103}
+            SDK=${SDK:-C:/Program Files (x86)/Windows Kits/10}
+            SDKVER=${SDKVER:-10.0.19041.0}
+            CL="$VC/bin/Hostx64/x64/cl.exe"
+            [ -x "$CL" ] || { echo "no cl.exe at $CL - set VC="; exit 1; }
+            [ -f voicevox_core.lib ] || { echo "build the host library first"; exit 1; }
+            export MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 VSLANG=1033
+            mkdir -p build/api
+            for prog in vvsay apitest; do
+                "$CL" /nologo /O2 /W3 /utf-8 /D_CRT_SECURE_NO_WARNINGS \
+                    "/I$VC/include" "/I$SDK/Include/$SDKVER/ucrt" \
+                    "/I$SDK/Include/$SDKVER/um" "/I$SDK/Include/$SDKVER/shared" \
+                    /Isrc "src/$prog.c" /Fo:build/api/ "/Fe:$prog.exe" \
+                    /link voicevox_core.lib "/LIBPATH:$VC/lib/x64" \
+                    "/LIBPATH:$SDK/Lib/$SDKVER/ucrt/x64" \
+                    "/LIBPATH:$SDK/Lib/$SDKVER/um/x64" > /dev/null
+                echo "   $prog.exe"
+            done
+            ;;
+        *)
+            CC=${CC:-cc}
+            for prog in vvsay apitest; do
+                $CC -O2 -Wall -Isrc -o "$prog" "src/$prog.c" src/vvhost.c -lpthread
+                echo "   $prog"
+            done
+            ;;
+    esac
+}
+
 case "$what" in
     guest) build_guest ;;
     host) build_host ;;
+    demos) build_demos ;;
     *)
         build_guest
         build_host
+        build_demos
         ;;
 esac
 echo "done"
