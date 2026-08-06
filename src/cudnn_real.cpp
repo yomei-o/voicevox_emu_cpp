@@ -307,6 +307,19 @@ int cudnnConvolutionForward(void*, const void* alpha, void* xDesc, const void* x
     const float* wp = (const float*)w;
     float* yp = (float*)y;
 
+    if (getenv("VVSTUB_STATS")) {
+        double lo = 0, hi = 0, sum = 0;
+        long total = (long)xs.n * xs.c * xs.len;
+        for (long i = 0; i < total; i++) {
+            float v = xp[i];
+            if (i == 0 || v < lo) lo = v;
+            if (i == 0 || v > hi) hi = v;
+            sum += v;
+        }
+        fprintf(stderr, "[conv-in] %ldx%d min=%g max=%g mean=%g\n", (long)xs.c,
+                xs.len, lo, hi, total ? sum / total : 0.0);
+    }
+
     int out_c_per_group = out_c / groups;
     Matrix col;
     for (int n = 0; n < xs.n; n++) {

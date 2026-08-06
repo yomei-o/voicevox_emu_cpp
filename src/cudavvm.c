@@ -81,12 +81,20 @@ int main(int argc, char** argv) {
     // Everything above only builds sessions.  The kernels of interest launch
     // here, and the ones from the vocoder are the ones that matter.
     step("voicevox_synthesizer_tts  <- every kernel the pipeline uses");
+    const char* text = argc > 5 ? argv[5] : "あ";
+    const char* out_path = argc > 6 ? argv[6] : "shim.wav";
     VoicevoxTtsOptions topts = voicevox_make_default_tts_options();
     uintptr_t len = 0;
     uint8_t* wav = NULL;
-    VoicevoxResultCode r = voicevox_synthesizer_tts(syn, "あ", style, topts, &len, &wav);
+    VoicevoxResultCode r = voicevox_synthesizer_tts(syn, text, style, topts, &len, &wav);
     if (r == VOICEVOX_RESULT_OK) {
-        printf("      produced %zu bytes (meaningless: nothing computed)\n", (size_t)len);
+        printf("      produced %zu bytes\n", (size_t)len);
+        FILE* f = fopen(out_path, "wb");
+        if (f) {
+            fwrite(wav, 1, (size_t)len, f);
+            fclose(f);
+            printf("      wrote %s\n", out_path);
+        }
         voicevox_wav_free(wav);
     } else {
         printf("      tts returned %d %s\n", (int)r, voicevox_error_result_to_message(r));
