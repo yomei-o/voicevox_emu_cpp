@@ -499,6 +499,125 @@ static void sse_shuffle(void) {
     SSE_TO_GPR("movmskpd", "movmskpd");
 }
 
+// ---- SSSE3 and SSE4.1 -----------------------------------------------------
+// Not advertised by the emulator's CPUID today, which is exactly why they are
+// worth testing: the reason the bits are off is that the instructions were
+// missing, and turning them on is what would let ONNX Runtime stop using its
+// slowest kernels.  Getting them right first, against an oracle, is the
+// difference between that being a one-line change and a silent wrong answer.
+//
+// BLENDVPS/BLENDVPD/PBLENDVB read their mask from xmm0, so they cannot use the
+// macros above - those put the destination there.
+
+#define SSE_BLENDV(name, mnem)                                                    \
+    do {                                                                          \
+        uint64_t h = FNV_INIT;                                                    \
+        for (int i = 0; i < NV; i++)                                              \
+            for (int j = 0; j < NV; j++)                                          \
+                for (int k = 0; k < NV; k += 3) {                                 \
+                    v128 r;                                                       \
+                    __asm__ volatile("movdqu %1, %%xmm2\n\t"                      \
+                                     "movdqu %2, %%xmm1\n\t"                      \
+                                     "movdqu %3, %%xmm0\n\t" mnem                 \
+                                     " %%xmm1, %%xmm2\n\t"                        \
+                                     "movdqu %%xmm2, %0"                          \
+                                     : "=m"(r)                                    \
+                                     : "m"(V[i]), "m"(V[j]), "m"(V[k])            \
+                                     : "xmm0", "xmm1", "xmm2", "memory");         \
+                    h = fnv(&r, 16, h);                                           \
+                }                                                                 \
+        report(name, h);                                                          \
+    } while (0)
+
+// PEXTR* and EXTRACTPS write a general register, and the width of that register
+// is part of the encoding - so the operand has to be named at the right size.
+#define SSE_EXTRACT(name, insn)                                                   \
+    do {                                                                          \
+        uint64_t h = FNV_INIT;                                                    \
+        for (int i = 0; i < NV; i++) {                                            \
+            uint64_t r = 0;                                                       \
+            __asm__ volatile("movdqu %1, %%xmm1\n\t" insn                         \
+                             : "=r"(r)                                            \
+                             : "m"(V[i])                                          \
+                             : "xmm1");                                           \
+            h = fnv64(r, h);                                                      \
+        }                                                                         \
+        report(name, h);                                                          \
+    } while (0)
+
+static void ssse3(void) {
+    printf("# SSSE3\n");
+    SSE_RR("pshufb", "pshufb");
+    SSE_RR("phaddw", "phaddw");
+    SSE_RR("phaddd", "phaddd");
+    SSE_RR("phaddsw", "phaddsw");
+    SSE_RR("phsubw", "phsubw");
+    SSE_RR("phsubd", "phsubd");
+    SSE_RR("phsubsw", "phsubsw");
+    SSE_RR("pmaddubsw", "pmaddubsw");
+    SSE_RR("pmulhrsw", "pmulhrsw");
+    SSE_RR("psignb", "psignb");
+    SSE_RR("psignw", "psignw");
+    SSE_RR("psignd", "psignd");
+    SSE_RR("pabsb", "pabsb");
+    SSE_RR("pabsw", "pabsw");
+    SSE_RR("pabsd", "pabsd");
+    SSE_RRI("palignr.3", "palignr", 3);
+    SSE_RRI("palignr.11", "palignr", 11);
+    SSE_RRI("palignr.20", "palignr", 20);
+}
+
+static void sse41(void) {
+    printf("# SSE4.1\n");
+    // The sign- and zero-extending moves read only the low half (or less) of
+    // the source, so the operand set still covers every interesting byte.
+    SSE_RR("pmovsxbw", "pmovsxbw");
+    SSE_RR("pmovsxbd", "pmovsxbd");
+    SSE_RR("pmovsxbq", "pmovsxbq");
+    SSE_RR("pmovsxwd", "pmovsxwd");
+    SSE_RR("pmovsxwq", "pmovsxwq");
+    SSE_RR("pmovsxdq", "pmovsxdq");
+    SSE_RR("pmovzxbw", "pmovzxbw");
+    SSE_RR("pmovzxbd", "pmovzxbd");
+    SSE_RR("pmovzxbq", "pmovzxbq");
+    SSE_RR("pmovzxwd", "pmovzxwd");
+    SSE_RR("pmovzxwq", "pmovzxwq");
+    SSE_RR("pmovzxdq", "pmovzxdq");
+    SSE_RR("pmuldq", "pmuldq");
+    SSE_RR("pmulld", "pmulld");
+    SSE_RR("pcmpeqq", "pcmpeqq");
+    SSE_RR("packusdw", "packusdw");
+    SSE_RR("pminsb", "pminsb");
+    SSE_RR("pminsd", "pminsd");
+    SSE_RR("pminuw", "pminuw");
+    SSE_RR("pminud", "pminud");
+    SSE_RR("pmaxsb", "pmaxsb");
+    SSE_RR("pmaxsd", "pmaxsd");
+    SSE_RR("pmaxuw", "pmaxuw");
+    SSE_RR("pmaxud", "pmaxud");
+    SSE_RR("phminposuw", "phminposuw");
+    SSE_RR("pcmpgtq", "pcmpgtq");  // SSE4.2, but the same shape
+    SSE_RRF("roundps.0", "roundps $0,");
+    SSE_RRF("roundps.1", "roundps $1,");
+    SSE_RRF("roundps.2", "roundps $2,");
+    SSE_RRF("roundps.3", "roundps $3,");
+    SSE_RRF("roundpd.0", "roundpd $0,");
+    SSE_RRF("roundpd.3", "roundpd $3,");
+    SSE_RRI("blendps.5", "blendps", 5);
+    SSE_RRI("blendpd.2", "blendpd", 2);
+    SSE_RRI("pblendw.a5", "pblendw", 0xa5);
+    SSE_RRI("insertps.4e", "insertps", 0x4e);
+    SSE_RRI("insertps.09", "insertps", 0x09);
+    SSE_BLENDV("blendvps", "blendvps");
+    SSE_BLENDV("blendvpd", "blendvpd");
+    SSE_BLENDV("pblendvb", "pblendvb");
+    SSE_EXTRACT("pextrb.3", "pextrb $3, %%xmm1, %k0");
+    SSE_EXTRACT("pextrw.5", "pextrw $5, %%xmm1, %k0");
+    SSE_EXTRACT("pextrd.2", "pextrd $2, %%xmm1, %k0");
+    SSE_EXTRACT("pextrq.1", "pextrq $1, %%xmm1, %0");
+    SSE_EXTRACT("extractps.2", "extractps $2, %%xmm1, %k0");
+}
+
 static void sse_float(void) {
     printf("# SSE/SSE2 floating point\n");
     SSE_RRF("addps", "addps");
@@ -859,6 +978,8 @@ static void atomics(void) {
 int main(void) {
     init_operands();
     sse_integer();
+    ssse3();
+    sse41();
     sse_shifts();
     sse_shuffle();
     sse_float();

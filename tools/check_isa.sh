@@ -4,7 +4,7 @@
 #   sh tools/check_isa.sh              # the native emulator
 #   sh tools/check_isa.sh wasm         # the WebAssembly build too
 #
-# Runs src/isatest.c under the emulator and diffs the 240 group checksums
+# Runs src/isatest.c under the emulator and diffs the group checksums
 # against qemu_ref.txt, which is what a real CPU and qemu-x86_64 both produce.
 # Run it after touching the emulator, and run the wasm side as well: a
 # WebAssembly build is a different compiler on a different target, and
@@ -30,7 +30,8 @@ export MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1
 fail=0
 report() {  # report <label> <output file>
     if diff -q qemu_ref.txt "$2" > /dev/null 2>&1; then
-        echo "ok    $1: 240/240 identical to native and qemu-x86_64"
+        n=$(grep -c "^[a-z]" qemu_ref.txt)
+        echo "ok    $1: $n/$n groups identical to native and qemu-x86_64"
     else
         echo "FAIL  $1:"
         diff qemu_ref.txt "$2" | head -20

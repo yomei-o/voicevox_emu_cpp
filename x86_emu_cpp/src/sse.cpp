@@ -1179,6 +1179,241 @@ bool Cpu::execute_sse(uint8_t op) {
                 xmm[modrm_reg_] = r;
                 return true;
             }
+            // ---- SSSE3 and SSE4.1 -------------------------------------
+            // CPUID does not advertise these yet, but implementing them is
+            // what makes advertising them possible - and ONNX Runtime's SSE2
+            // fallback kernels are the slowest path it has.  Every one of
+            // them is checked against a real CPU and qemu by isatest.
+            if (sel == Sel::P66 && ((op3 >= 0x01 && op3 <= 0x0B) ||
+                                    (op3 >= 0x1C && op3 <= 0x1E))) {  // SSSE3
+                RM rm = decode_modrm();
+                Xmm a = xmm[modrm_reg_], b = xmm_read(rm), r{};
+                auto sat_sw = [](int32_t v) -> uint16_t {
+                    return v < -32768 ? 0x8000 : v > 32767 ? 0x7FFF : static_cast<uint16_t>(v);
+                };
+                auto sw = [](uint16_t v) { return static_cast<int16_t>(v); };
+                switch (op3) {
+                    case 0x01:  // PHADDW: pairs within the destination, then the source
+                    case 0x05:  // PHSUBW
+                        for (int i = 0; i < 4; ++i) {
+                            r.w[i] = static_cast<uint16_t>(op3 == 0x01 ? a.w[2 * i] + a.w[2 * i + 1]
+                                                                      : a.w[2 * i] - a.w[2 * i + 1]);
+                            r.w[4 + i] = static_cast<uint16_t>(
+                                op3 == 0x01 ? b.w[2 * i] + b.w[2 * i + 1]
+                                            : b.w[2 * i] - b.w[2 * i + 1]);
+                        }
+                        break;
+                    case 0x02:  // PHADDD
+                    case 0x06:  // PHSUBD
+                        for (int i = 0; i < 2; ++i) {
+                            r.d[i] = op3 == 0x02 ? a.d[2 * i] + a.d[2 * i + 1]
+                                                 : a.d[2 * i] - a.d[2 * i + 1];
+                            r.d[2 + i] = op3 == 0x02 ? b.d[2 * i] + b.d[2 * i + 1]
+                                                     : b.d[2 * i] - b.d[2 * i + 1];
+                        }
+                        break;
+                    case 0x03:  // PHADDSW
+                    case 0x07:  // PHSUBSW
+                        for (int i = 0; i < 4; ++i) {
+                            r.w[i] = sat_sw(op3 == 0x03 ? sw(a.w[2 * i]) + sw(a.w[2 * i + 1])
+                                                        : sw(a.w[2 * i]) - sw(a.w[2 * i + 1]));
+                            r.w[4 + i] = sat_sw(op3 == 0x03 ? sw(b.w[2 * i]) + sw(b.w[2 * i + 1])
+                                                            : sw(b.w[2 * i]) - sw(b.w[2 * i + 1]));
+                        }
+                        break;
+                    case 0x04:  // PMADDUBSW: the destination is unsigned, the source signed
+                        for (int i = 0; i < 8; ++i) {
+                            int32_t lo = static_cast<int32_t>(a.b[2 * i]) *
+                                         static_cast<int8_t>(b.b[2 * i]);
+                            int32_t hi = static_cast<int32_t>(a.b[2 * i + 1]) *
+                                         static_cast<int8_t>(b.b[2 * i + 1]);
+                            r.w[i] = sat_sw(lo + hi);
+                        }
+                        break;
+                    case 0x08:  // PSIGNB
+                    case 0x09:  // PSIGNW
+                    case 0x0A:  // PSIGND
+                        // The source's sign decides: negate, zero, or leave alone.
+                        if (op3 == 0x08)
+                            for (int i = 0; i < 16; ++i) {
+                                int8_t s = static_cast<int8_t>(b.b[i]);
+                                r.b[i] = s < 0 ? static_cast<uint8_t>(-static_cast<int8_t>(a.b[i]))
+                                               : (s == 0 ? 0 : a.b[i]);
+                            }
+                        else if (op3 == 0x09)
+                            for (int i = 0; i < 8; ++i) {
+                                int16_t s = sw(b.w[i]);
+                                r.w[i] = s < 0 ? static_cast<uint16_t>(-sw(a.w[i]))
+                                               : (s == 0 ? 0 : a.w[i]);
+                            }
+                        else
+                            for (int i = 0; i < 4; ++i) {
+                                int32_t s = static_cast<int32_t>(b.d[i]);
+                                r.d[i] = s < 0 ? static_cast<uint32_t>(-static_cast<int32_t>(a.d[i]))
+                                               : (s == 0 ? 0 : a.d[i]);
+                            }
+                        break;
+                    case 0x0B:  // PMULHRSW: multiply, keep the top, round to nearest
+                        for (int i = 0; i < 8; ++i) {
+                            int32_t p = sw(a.w[i]) * sw(b.w[i]);
+                            r.w[i] = static_cast<uint16_t>(((p >> 14) + 1) >> 1);
+                        }
+                        break;
+                    case 0x1C:  // PABSB - the source is the operand, not the destination
+                        for (int i = 0; i < 16; ++i) {
+                            int8_t v = static_cast<int8_t>(b.b[i]);
+                            r.b[i] = static_cast<uint8_t>(v < 0 ? -v : v);
+                        }
+                        break;
+                    case 0x1D:  // PABSW
+                        for (int i = 0; i < 8; ++i) {
+                            int16_t v = sw(b.w[i]);
+                            r.w[i] = static_cast<uint16_t>(v < 0 ? -v : v);
+                        }
+                        break;
+                    default:  // 0x1E, PABSD
+                        for (int i = 0; i < 4; ++i) {
+                            int32_t v = static_cast<int32_t>(b.d[i]);
+                            r.d[i] = static_cast<uint32_t>(v < 0 ? -v : v);
+                        }
+                        break;
+                }
+                xmm[modrm_reg_] = r;
+                return true;
+            }
+            if (sel == Sel::P66 && (op3 == 0x10 || op3 == 0x14 || op3 == 0x15)) {
+                // PBLENDVB / BLENDVPS / BLENDVPD: the mask is xmm0, implicitly,
+                // and only the top bit of each element of it is read.
+                RM rm = decode_modrm();
+                Xmm a = xmm[modrm_reg_], b = xmm_read(rm), m = xmm[0], r = a;
+                if (op3 == 0x10)
+                    for (int i = 0; i < 16; ++i) r.b[i] = (m.b[i] & 0x80) ? b.b[i] : a.b[i];
+                else if (op3 == 0x14)
+                    for (int i = 0; i < 4; ++i) r.d[i] = (m.d[i] & 0x80000000u) ? b.d[i] : a.d[i];
+                else
+                    for (int i = 0; i < 2; ++i)
+                        r.q[i] = (m.q[i] & 0x8000000000000000ull) ? b.q[i] : a.q[i];
+                xmm[modrm_reg_] = r;
+                return true;
+            }
+            if (sel == Sel::P66 && ((op3 >= 0x20 && op3 <= 0x25) ||
+                                    (op3 >= 0x30 && op3 <= 0x35))) {
+                // PMOVSX / PMOVZX: widen the low part of the source.  The two
+                // families differ only in what fills the new high bits.
+                RM rm = decode_modrm();
+                Xmm b = xmm_read(rm), r{};
+                bool zero = op3 >= 0x30;
+                switch (op3 & 0x0F) {
+                    case 0x0:  // byte -> word
+                        for (int i = 0; i < 8; ++i)
+                            r.w[i] = zero ? b.b[i]
+                                          : static_cast<uint16_t>(static_cast<int8_t>(b.b[i]));
+                        break;
+                    case 0x1:  // byte -> dword
+                        for (int i = 0; i < 4; ++i)
+                            r.d[i] = zero ? b.b[i]
+                                          : static_cast<uint32_t>(static_cast<int8_t>(b.b[i]));
+                        break;
+                    case 0x2:  // byte -> qword
+                        for (int i = 0; i < 2; ++i)
+                            r.q[i] = zero ? b.b[i]
+                                          : static_cast<uint64_t>(static_cast<int8_t>(b.b[i]));
+                        break;
+                    case 0x3:  // word -> dword
+                        for (int i = 0; i < 4; ++i)
+                            r.d[i] = zero ? b.w[i]
+                                          : static_cast<uint32_t>(static_cast<int16_t>(b.w[i]));
+                        break;
+                    case 0x4:  // word -> qword
+                        for (int i = 0; i < 2; ++i)
+                            r.q[i] = zero ? b.w[i]
+                                          : static_cast<uint64_t>(static_cast<int16_t>(b.w[i]));
+                        break;
+                    default:  // 0x5, dword -> qword
+                        for (int i = 0; i < 2; ++i)
+                            r.q[i] = zero ? b.d[i]
+                                          : static_cast<uint64_t>(static_cast<int32_t>(b.d[i]));
+                        break;
+                }
+                xmm[modrm_reg_] = r;
+                return true;
+            }
+            if (sel == Sel::P66 && (op3 == 0x28 || op3 == 0x29 || op3 == 0x2B ||
+                                    op3 == 0x37 || (op3 >= 0x38 && op3 <= 0x41))) {
+                RM rm = decode_modrm();
+                Xmm a = xmm[modrm_reg_], b = xmm_read(rm), r{};
+                auto sd = [](uint32_t v) { return static_cast<int32_t>(v); };
+                switch (op3) {
+                    case 0x28:  // PMULDQ: the even dwords, signed, to qwords
+                        for (int i = 0; i < 2; ++i)
+                            r.q[i] = static_cast<uint64_t>(static_cast<int64_t>(sd(a.d[2 * i])) *
+                                                           sd(b.d[2 * i]));
+                        break;
+                    case 0x29:  // PCMPEQQ
+                        for (int i = 0; i < 2; ++i) r.q[i] = a.q[i] == b.q[i] ? ~0ull : 0;
+                        break;
+                    case 0x2B: {  // PACKUSDW: signed dwords -> unsigned words
+                        auto sat = [](int32_t v) -> uint16_t {
+                            return v < 0 ? 0 : v > 65535 ? 0xFFFF : static_cast<uint16_t>(v);
+                        };
+                        for (int i = 0; i < 4; ++i) r.w[i] = sat(sd(a.d[i]));
+                        for (int i = 0; i < 4; ++i) r.w[4 + i] = sat(sd(b.d[i]));
+                        break;
+                    }
+                    case 0x37:  // PCMPGTQ (SSE4.2)
+                        for (int i = 0; i < 2; ++i)
+                            r.q[i] = static_cast<int64_t>(a.q[i]) > static_cast<int64_t>(b.q[i])
+                                         ? ~0ull
+                                         : 0;
+                        break;
+                    case 0x38:  // PMINSB
+                    case 0x3C:  // PMAXSB
+                        for (int i = 0; i < 16; ++i) {
+                            int8_t x = static_cast<int8_t>(a.b[i]), y = static_cast<int8_t>(b.b[i]);
+                            r.b[i] = static_cast<uint8_t>(op3 == 0x38 ? (x < y ? x : y)
+                                                                     : (x > y ? x : y));
+                        }
+                        break;
+                    case 0x39:  // PMINSD
+                    case 0x3D:  // PMAXSD
+                        for (int i = 0; i < 4; ++i) {
+                            int32_t x = sd(a.d[i]), y = sd(b.d[i]);
+                            r.d[i] = static_cast<uint32_t>(op3 == 0x39 ? (x < y ? x : y)
+                                                                      : (x > y ? x : y));
+                        }
+                        break;
+                    case 0x3A:  // PMINUW
+                    case 0x3E:  // PMAXUW
+                        for (int i = 0; i < 8; ++i)
+                            r.w[i] = op3 == 0x3A ? (a.w[i] < b.w[i] ? a.w[i] : b.w[i])
+                                                 : (a.w[i] > b.w[i] ? a.w[i] : b.w[i]);
+                        break;
+                    case 0x3B:  // PMINUD
+                    case 0x3F:  // PMAXUD
+                        for (int i = 0; i < 4; ++i)
+                            r.d[i] = op3 == 0x3B ? (a.d[i] < b.d[i] ? a.d[i] : b.d[i])
+                                                 : (a.d[i] > b.d[i] ? a.d[i] : b.d[i]);
+                        break;
+                    case 0x40:  // PMULLD: the low half of the signed product
+                        for (int i = 0; i < 4; ++i)
+                            r.d[i] = static_cast<uint32_t>(sd(a.d[i]) * sd(b.d[i]));
+                        break;
+                    default: {  // 0x41, PHMINPOSUW: the smallest word, and where it was
+                        int at = 0;
+                        uint16_t best = b.w[0];
+                        for (int i = 1; i < 8; ++i)
+                            if (b.w[i] < best) {
+                                best = b.w[i];
+                                at = i;
+                            }
+                        r.w[0] = best;
+                        r.w[1] = static_cast<uint16_t>(at);
+                        break;
+                    }
+                }
+                xmm[modrm_reg_] = r;
+                return true;
+            }
             unsupported("0F 38 opcode", op3, start);
         }
         case 0x3A: {
@@ -1210,6 +1445,103 @@ bool Cpu::execute_sse(uint8_t op) {
                     r.b[i] = idx < 16 ? s.b[idx] : (idx < 32 ? a.b[idx - 16] : 0);
                 }
                 xmm[modrm_reg_] = r;
+                return true;
+            }
+            if (sel == Sel::P66 && (op3 == 0x08 || op3 == 0x09)) {  // ROUNDPS / ROUNDPD
+                RM rm = decode_modrm(1);
+                Xmm s = xmm_read(rm), r{};
+                uint8_t imm = fetch8();
+                // Bit 2 says "use MXCSR"; otherwise bits 1:0 name the mode.
+                auto round = [&](double v) {
+                    if (imm & 4) return round_by_mxcsr(mxcsr, v);
+                    switch (imm & 3) {
+                        case 0: return std::nearbyint(v);
+                        case 1: return std::floor(v);
+                        case 2: return std::ceil(v);
+                        default: return std::trunc(v);
+                    }
+                };
+                if (op3 == 0x09)
+                    for (int i = 0; i < 2; ++i) r.f64[i] = round(s.f64[i]);
+                else
+                    for (int i = 0; i < 4; ++i)
+                        r.f32[i] = static_cast<float>(round(s.f32[i]));
+                xmm[modrm_reg_] = r;
+                return true;
+            }
+            if (sel == Sel::P66 && (op3 == 0x0C || op3 == 0x0D || op3 == 0x0E)) {
+                // BLENDPS / BLENDPD / PBLENDW: one immediate bit per element.
+                RM rm = decode_modrm(1);
+                Xmm a = xmm[modrm_reg_], b = xmm_read(rm), r = a;
+                uint8_t imm = fetch8();
+                if (op3 == 0x0C)
+                    for (int i = 0; i < 4; ++i) r.d[i] = (imm >> i) & 1 ? b.d[i] : a.d[i];
+                else if (op3 == 0x0D)
+                    for (int i = 0; i < 2; ++i) r.q[i] = (imm >> i) & 1 ? b.q[i] : a.q[i];
+                else
+                    for (int i = 0; i < 8; ++i) r.w[i] = (imm >> i) & 1 ? b.w[i] : a.w[i];
+                xmm[modrm_reg_] = r;
+                return true;
+            }
+            if (sel == Sel::P66 && op3 == 0x21) {  // INSERTPS
+                RM rm = decode_modrm(1);
+                Xmm s = xmm_read(rm);
+                uint8_t imm = fetch8();
+                // imm[7:6] picks the source dword (register form only), imm[5:4]
+                // the destination one, and imm[3:0] then zeroes whichever
+                // elements it names - including the one just written.
+                uint32_t v = rm.is_reg ? s.d[(imm >> 6) & 3] : s.d[0];
+                Xmm& d = xmm[modrm_reg_];
+                d.d[(imm >> 4) & 3] = v;
+                for (int i = 0; i < 4; ++i)
+                    if ((imm >> i) & 1) d.d[i] = 0;
+                return true;
+            }
+            if (sel == Sel::P66 && (op3 == 0x14 || op3 == 0x15 || op3 == 0x16 || op3 == 0x17)) {
+                // PEXTRB / PEXTRW / PEXTRD / PEXTRQ / EXTRACTPS.  The register
+                // form zero-extends into the whole general register; the memory
+                // form writes exactly the element's width.
+                RM rm = decode_modrm(1);
+                Xmm s = xmm[modrm_reg_];
+                uint8_t imm = fetch8();
+                uint64_t v;
+                int width;
+                if (op3 == 0x14) {
+                    v = s.b[imm & 15];
+                    width = 1;
+                } else if (op3 == 0x15) {
+                    v = s.w[imm & 7];
+                    width = 2;
+                } else if (op3 == 0x17) {
+                    v = s.d[imm & 3];
+                    width = 4;
+                } else if (pfx_.rex_w) {
+                    v = s.q[imm & 1];
+                    width = 8;
+                } else {
+                    v = s.d[imm & 3];
+                    width = 4;
+                }
+                if (rm.is_reg)
+                    reg_write(rm.reg, width == 8 ? 8 : 4, v);
+                else
+                    mem_.write_sized(rm.addr, width, v);
+                return true;
+            }
+            if (sel == Sel::P66 && (op3 == 0x20 || op3 == 0x22)) {
+                // PINSRB / PINSRD / PINSRQ, from a general register or memory.
+                RM rm = decode_modrm(1);
+                int width = op3 == 0x20 ? 1 : (pfx_.rex_w ? 8 : 4);
+                uint64_t v = rm.is_reg ? reg_read(rm.reg, width == 8 ? 8 : 4)
+                                       : mem_.read_sized(rm.addr, width);
+                uint8_t imm = fetch8();
+                Xmm& d = xmm[modrm_reg_];
+                if (width == 1)
+                    d.b[imm & 15] = static_cast<uint8_t>(v);
+                else if (width == 4)
+                    d.d[imm & 3] = static_cast<uint32_t>(v);
+                else
+                    d.q[imm & 1] = v;
                 return true;
             }
             if (op3 == 0xDF && sel == Sel::P66) {  // AESKEYGENASSIST
