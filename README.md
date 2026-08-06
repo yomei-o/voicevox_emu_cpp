@@ -34,8 +34,13 @@ CPU that is entirely software.
 API — all 63 functions of the published `voicevox_core.h`, with the same
 signatures and the same meaning. A program written against CORE links this
 instead and runs unchanged. `src/apitest.c` calls the whole surface and prints
-what comes back; built against the real library and against this one, the two
-outputs differ only in a randomly generated UUID.
+what comes back, and it has been run three ways:
+
+| | |
+| --- | --- |
+| against the real `libvoicevox_core.so` | 45 checks, 0 failed — the reference |
+| against this implementation, natively | the same 45, and the same values; the two outputs differ only in a randomly generated UUID |
+| against this implementation, **through the emulator** | `--no-audio`: 42 checks, 0 failed, every line identical to the reference. The three it skips are the ones that generate audio, which take hours emulated and which `vvsay` covers end to end. |
 
 **It runs in a browser.** `web/` builds the emulator to WebAssembly and runs the
 same guest in a tab: the real `ld-linux-x86-64.so.2` maps the 18 MB runtime,
