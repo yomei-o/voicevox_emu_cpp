@@ -54,9 +54,43 @@ function untar(bytes, write) {
     }
 }
 
+// A hundred megabytes is a lot to ask for twice, so the payload goes into the
+// Cache API on the way past and comes back from there on every later visit.
+// The cache is not available in every context (an insecure origin, private
+// browsing), so every use of it is allowed to fail and fall back to the network.
+const CACHE_NAME = 'voicevox-emu-payload-v1';
+let cachePromise = null;
+
+async function openCache() {
+    if (cachePromise === null)
+        cachePromise = (typeof caches !== 'undefined' ? caches.open(CACHE_NAME) : null) ||
+                       Promise.resolve(null);
+    try {
+        return await cachePromise;
+    } catch (e) {
+        return null;
+    }
+}
+
 async function fetchBytes(url, onProgress) {
+    const cache = await openCache();
+    if (cache) {
+        try {
+            const hit = await cache.match(url);
+            if (hit) {
+                const bytes = new Uint8Array(await hit.arrayBuffer());
+                if (onProgress) onProgress(bytes.length, bytes.length);
+                return bytes;
+            }
+        } catch (e) { /* fall through to the network */ }
+    }
     const res = await fetch(url);
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+    if (cache) {
+        try {
+            await cache.put(url, res.clone());
+        } catch (e) { /* over quota, or opaque: not worth failing the run over */ }
+    }
     const total = Number(res.headers.get('content-length')) || 0;
     if (!res.body) return new Uint8Array(await res.arrayBuffer());
     const reader = res.body.getReader();
