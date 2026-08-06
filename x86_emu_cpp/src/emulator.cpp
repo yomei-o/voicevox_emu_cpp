@@ -1023,10 +1023,20 @@ void Emulator::write_raw(int fd, const void* data, size_t len) {
     // nothing about the C runtime's buffer on real Windows either, so a guest
     // that mixes the two sees its raw writes overtake its buffered ones - and
     // matching that is the whole point of buffering here.
-    if (output_sink)
+    if (output_sink) {
         output_sink(fd, static_cast<const char*>(data), len);
-    else
-        std::fwrite(data, 1, len, fd == 2 ? stderr : stdout);
+        return;
+    }
+    std::FILE* out = fd == 2 ? stderr : stdout;
+    std::fwrite(data, 1, len, out);
+    // ...but the bytes do have to leave the emulator.  When our stdout is a
+    // pipe rather than a terminal the C runtime gives it a 4 KB buffer that
+    // nobody empties, so a guest that answers a request and waits for the next
+    // one, and a caller that sent a request and waits for the answer, wait for
+    // each other forever.  The guest's own fflush only gets the bytes as far as
+    // here.  It also means a long run's progress can be watched through a
+    // redirect, which it could not before.
+    std::fflush(out);
 }
 
 void Emulator::flush_guest_output() {
@@ -1037,10 +1047,12 @@ void Emulator::flush_guest_output() {
         files.write(1, out.data(), out.size());
         return;
     }
-    if (output_sink)
+    if (output_sink) {
         output_sink(1, out.data(), out.size());
-    else
-        std::fwrite(out.data(), 1, out.size(), stdout);
+        return;
+    }
+    std::fwrite(out.data(), 1, out.size(), stdout);
+    std::fflush(stdout);
 }
 
 void Emulator::write_text(int fd, const std::string& data) {
