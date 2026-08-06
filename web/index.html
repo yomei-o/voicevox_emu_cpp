@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VOICEVOX CORE をブラウザの中のエミュレータで動かす</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #fbfaf8; --fg: #1c1b19; --dim: #6b6862; --line: #e0dcd4;
+  --card: #ffffff; --accent: #2f7d5e; --accent-fg: #ffffff;
+  --term-bg: #f3f1ec; --warn: #8a5a00;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14150f; --fg: #eceada; --dim: #9a9788; --line: #2e3025;
+    --card: #1b1d16; --accent: #7ac6a0; --accent-fg: #10120c;
+    --term-bg: #101208; --warn: #d8b25c;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 2rem 1.25rem 4rem;
+  background: var(--bg); color: var(--fg);
+  font: 16px/1.75 system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+}
+main { max-width: 46rem; margin: 0 auto; }
+h1 { font-size: 1.55rem; line-height: 1.35; margin: 0 0 .5rem; letter-spacing: .01em; }
+h2 { font-size: 1.05rem; margin: 2.5rem 0 .75rem; letter-spacing: .02em; }
+p { margin: 0 0 1rem; }
+.lede { color: var(--dim); margin-bottom: 2rem; }
+.card {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem;
+}
+button {
+  font: inherit; font-weight: 600; padding: .6rem 1.25rem; border-radius: 7px;
+  border: 1px solid transparent; background: var(--accent); color: var(--accent-fg);
+  cursor: pointer;
+}
+button:disabled { opacity: .4; cursor: default; }
+button.secondary { background: transparent; color: var(--fg); border-color: var(--line); }
+input[type=text], select {
+  font: inherit; padding: .55rem .7rem; border-radius: 7px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+}
+input[type=text] { width: 100%; }
+.row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-top: .75rem; }
+.bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin-top: .75rem; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.status { color: var(--dim); font-size: .9rem; margin-top: .5rem; min-height: 1.5em; }
+pre.term {
+  background: var(--term-bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: .9rem 1rem; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; word-break: break-word; max-height: 22rem; overflow-y: auto;
+  margin: 0;
+}
+.note { font-size: .9rem; color: var(--dim); }
+.warn { color: var(--warn); }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
+th { color: var(--dim); font-weight: 600; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+a { color: var(--accent); }
+footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--line); font-size: .88rem; color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>公式 VOICEVOX CORE を、ブラウザの中の x86-64 エミュレータで動かす</h1>
+
+<p class="lede">
+このページは VOICEVOX を移植していません。<b>公式のバイナリをそのまま</b>、
+1 命令ずつ実行しています。ゲストは Linux x86-64 のプログラムで、
+CPU だけが WebAssembly で書かれたソフトウェアです。
+</p>
+
+<p>
+VOICEVOX の音声モデルは暗号化されていて、パッチの当たった
+<code>voicevox_onnxruntime</code> だけが開けます。だから「自前で書き直した推論エンジン」
+ではどうやっても声は出ません。この方法はその逆で、
+<b>公式のランタイムに、公式のやり方で仕事をさせます</b>。逆コンパイルも抽出もしません。
+</p>
+
+<h2>1. 材料を取ってくる</h2>
+<div class="card">
+  <p class="note" style="margin-bottom:.5rem">
+    ONNX Runtime、CORE、ずんだもんの音声モデル、Open JTalk 辞書、
+    そして Debian の glibc 一式を、エミュレータの中のファイルシステムに置きます。
+    <b>合計およそ 105 MB のダウンロード</b>（展開後 190 MB）。一度きりです。
+  </p>
+  <button id="prepare">材料をダウンロード</button>
+  <div class="bar"><i id="bar"></i></div>
+  <div class="status" id="prep-status">まだ何も読み込んでいません</div>
+</div>
+
+<h2>2. しゃべらせる</h2>
+<div class="card">
+  <input type="text" id="text" value="あ" spellcheck="false">
+  <div class="row">
+    <label class="note">プリセット</label>
+    <button class="secondary" data-preset="あ">あ（最短）</button>
+    <button class="secondary" data-preset="こんにちは">こんにちは</button>
+    <button class="secondary" data-preset="ずんだもんなのだ">ずんだもんなのだ</button>
+  </div>
+  <div class="row">
+    <label class="note" for="style">スタイル ID</label>
+    <input type="text" id="style" value="3" style="width:5rem">
+    <button id="speak" disabled>合成する</button>
+  </div>
+  <div class="status" id="run-status"></div>
+  <div id="player" style="margin-top:1rem"></div>
+</div>
+
+<h2>ゲストの出力</h2>
+<pre class="term" id="term">（まだ動いていません）</pre>
+
+<h2>どのくらい時間がかかるのか</h2>
+<div class="card">
+  <p class="note">
+    正直に言うと、<b>とても遅い</b>です。ネイティブなら 2 秒で終わることを、
+    インタプリタ方式のエミュレータは何千倍もかけてやります。
+    この数字はごまかしても仕方がないので、そのまま出します。
+  </p>
+  <table id="timing">
+    <tr><th>やること</th><th class="num">ネイティブ</th><th class="num">エミュレータ<br>(デスクトップ実測)</th></tr>
+    <tr><td>ONNX Runtime のロード</td><td class="num">0.0 秒</td><td class="num">4 秒</td></tr>
+    <tr><td>Open JTalk 辞書のロード</td><td class="num">0.0 秒</td><td class="num">0.2 秒</td></tr>
+    <tr><td>音声モデルの復号とセッション初期化</td><td class="num">0.6 秒</td><td class="num">約 8 分</td></tr>
+    <tr><td>推論（音声の長さに比例）</td><td class="num">1.5 秒</td><td class="num">下の実測を参照</td></tr>
+  </table>
+  <p class="note" style="margin-top:1rem">
+    ブラウザの中ではこれよりさらに遅くなります。<b>タブを開いたまま待てる人向け</b>です。
+    短い言葉ほど速く終わるので、まずは「あ」から試すのをおすすめします。
+  </p>
+</div>
+
+<h2>これは何をしているのか</h2>
+<div class="card">
+  <p class="note" style="margin:0">
+    ブラウザ → WebAssembly の x86-64 エミュレータ → 本物の
+    <code>ld-linux-x86-64.so.2</code> → <code>libvoicevox_core.so</code> →
+    <code>libvoicevox_onnxruntime.so</code>。
+    動的リンク、IFUNC の解決、C++ の静的初期化子、そして ONNX Runtime のセッション初期化まで、
+    全部エミュレートされた命令の上で起きています。
+    同じエミュレータの上に <code>voicevox_core</code> と同じ C API も実装してあり、
+    そちらはネイティブのプログラムから普通に呼べます。
+  </p>
+</div>
+
+<footer>
+  音声を利用する場合は <b>VOICEVOX:ずんだもん</b> のクレジット表記が必要です。
+  詳しくは <a href="https://zunko.jp/con_ongen_kiyaku.html">音源利用規約</a> を参照してください。
+  ソース: <a href="https://github.com/yomei-o/voicevox_emu_cpp">yomei-o/voicevox_emu_cpp</a>
+</footer>
+
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const term = $('term');
+let termText = '';
+let worker = null;
+let payload = null;
+
+function log(text) {
+  if (termText === '') term.textContent = '';
+  termText += text;
+  term.textContent = termText;
+  term.scrollTop = term.scrollHeight;
+}
+
+function bytes(n) {
+  return n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : (n / 1e3).toFixed(0) + ' kB';
+}
+
+function startWorker() {
+  worker = new Worker('worker.js');
+  worker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === 'status') {
+      $('prep-status').textContent = m.text;
+    } else if (m.type === 'progress') {
+      const pct = m.total ? Math.min(100, (m.done / m.total) * 100) : 0;
+      $('bar').style.width = pct + '%';
+      $('prep-status').textContent =
+        `${bytes(m.done)} / ${bytes(m.total)} (${pct.toFixed(0)}%)`;
+    } else if (m.type === 'out') {
+      log(m.text);
+    } else if (m.type === 'ready') {
+      $('bar').style.width = '100%';
+      $('prep-status').textContent = '準備完了 — 合成できます';
+      $('speak').disabled = false;
+      $('prepare').disabled = true;
+    } else if (m.type === 'done') {
+      const blob = new Blob([m.wav], {type: 'audio/wav'});
+      const url = URL.createObjectURL(blob);
+      $('player').innerHTML =
+        `<audio controls autoplay src="${url}"></audio>
+         <div class="note">${bytes(m.wav.length)} の WAV を
+         ${m.seconds.toFixed(1)} 秒で生成
+         （${(m.instructions / 1e9).toFixed(2)} G 命令）
+         — <a download="zundamon.wav" href="${url}">ダウンロード</a></div>`;
+      $('run-status').textContent = '完了';
+      $('speak').disabled = false;
+    } else if (m.type === 'error') {
+      log('\n*** ' + m.text + '\n');
+      $('run-status').innerHTML = '<span class="warn">失敗しました — 上の出力を見てください</span>';
+      $('speak').disabled = false;
+    }
+  };
+}
+
+$('prepare').onclick = async () => {
+  $('prepare').disabled = true;
+  if (!worker) startWorker();
+  if (!payload) payload = await (await fetch('payload.json')).json();
+  worker.postMessage({type: 'prepare', payload});
+};
+
+$('speak').onclick = () => {
+  $('speak').disabled = true;
+  $('player').innerHTML = '';
+  $('run-status').textContent = '合成中 — 進み具合はゲストの出力に出ます。時間がかかります。';
+  termText = '';
+  term.textContent = '';
+  worker.postMessage({
+    type: 'speak',
+    text: $('text').value,
+    style: parseInt($('style').value, 10) || 3,
+    out: '/opt/vv/out.wav',
+  });
+};
+
+for (const b of document.querySelectorAll('[data-preset]'))
+  b.onclick = () => { $('text').value = b.dataset.preset; };
+</script>
+</body>
+</html>

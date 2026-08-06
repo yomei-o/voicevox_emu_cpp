@@ -34,3 +34,5 @@ vvsay.exe
 sysroot/opt/vv/vvagent
 *.log
 emu_isatest_new.txt
+web_out.wav
+web/guest/probe

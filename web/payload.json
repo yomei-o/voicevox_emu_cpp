@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "What the guest needs to exist inside the emulator, and where the page",
+    "fetches it from.  Every URL points at a file this repository already",
+    "carries, so the demo adds no copies: GitHub Pages serves the same bytes",
+    "that setup.sh unpacks locally.",
+    "",
+    "The seven shared libraries are exactly what the dynamic loader opens -",
+    "traced with X86EMU_TRACE_OPEN=1 - and not the whole Debian sysroot, which",
+    "is mostly headers and static archives that no run ever touches.",
+    "",
+    "`bytes` is only used to size the progress bar."
+  ],
+  "files": [
+    {"url": "../sysroot/lib64/ld-linux-x86-64.so.2", "path": "/lib64/ld-linux-x86-64.so.2", "bytes": 215000},
+    {"url": "../sysroot/lib/x86_64-linux-gnu/libc.so.6", "path": "/lib/x86_64-linux-gnu/libc.so.6", "bytes": 1926232},
+    {"url": "../sysroot/lib/x86_64-linux-gnu/libm.so.6", "path": "/lib/x86_64-linux-gnu/libm.so.6", "bytes": 911904},
+    {"url": "../sysroot/lib/x86_64-linux-gnu/libdl.so.2", "path": "/lib/x86_64-linux-gnu/libdl.so.2", "bytes": 14480},
+    {"url": "../sysroot/lib/x86_64-linux-gnu/libpthread.so.0", "path": "/lib/x86_64-linux-gnu/libpthread.so.0", "bytes": 14480},
+    {"url": "../sysroot/lib/x86_64-linux-gnu/libgcc_s.so.1", "path": "/lib/x86_64-linux-gnu/libgcc_s.so.1", "bytes": 125312},
+    {"url": "../sysroot/usr/lib/x86_64-linux-gnu/libstdc++.so.6", "path": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6", "bytes": 2190440},
+    {"url": "../sysroot/proc/cpuinfo", "path": "/proc/cpuinfo", "bytes": 1024},
+    {"url": "guest/tts", "path": "/opt/vv/tts", "bytes": 17440, "mode": 493},
+    {"url": "../guest/libvoicevox_core.so", "path": "/opt/vv/libvoicevox_core.so", "bytes": 4196464},
+    {"url": "../guest/libvoicevox_onnxruntime.so.1.17.3", "path": "/opt/vv/libvoicevox_onnxruntime.so.1.17.3", "bytes": 18219584},
+    {"url": "../guest/0.vvm", "path": "/opt/vv/0.vvm", "bytes": 58214379}
+  ],
+  "archives": [
+    {"url": "../guest/open_jtalk_dic_utf_8-1.11.tar.gz", "into": "/opt/vv", "bytes": 23500000}
+  ],
+  "program": "/opt/vv/tts",
+  "onnxruntime": "libvoicevox_onnxruntime.so.1.17.3",
+  "dictionary": "open_jtalk_dic_utf_8-1.11",
+  "model": "0.vvm"
+}
