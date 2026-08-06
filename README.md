@@ -20,6 +20,10 @@ Which makes the interesting property portability rather than speed. The guest is
 a Linux x86-64 program; the host is whatever the emulator builds for, which today
 includes Windows on ARM and a browser tab.
 
+**Demo:** <https://yomei-o.github.io/voicevox_emu_cpp/web/> — type Japanese and
+watch the real Open JTalk work out the accent inside an emulated CPU, in about a
+second. The synthesis button is there too, and honest about costing hours.
+
 ## State
 
 **It speaks.** `voicevox_synthesizer_load_voice_model` decrypts the model and

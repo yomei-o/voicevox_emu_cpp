@@ -10,6 +10,7 @@ without fetching anything. Each is redistributable, and this is the paperwork.
 | `guest/libvoicevox_core.so` | VOICEVOX CORE | MIT — `voicevox_core-LICENSE.txt` |
 | `guest/open_jtalk_dic_utf_8-1.11/` | Open JTalk's system dictionary (NAIST-jdic, compiled for MeCab) | modified BSD — `open_jtalk_dic-COPYING.txt` |
 | `guest/predict_duration.onnx` | a dummy model from `VOICEVOX/voicevox_core`, used as the plain-ONNX control | MIT, with the CORE repository |
+| `web/sample/*.wav` | audio this project generated with ずんだもん (style 3), kept so the demo page has something to play without a several-hour wait | the same voice-model terms; the page carries the credit |
 | `sysroot/lib`, `sysroot/usr/lib`, `sysroot/usr/include` | Debian bookworm glibc, libstdc++ and libgcc | LGPL-2.1+ / GPL-3 with the GCC Runtime Library Exception — `debian-libc6-copyright.txt`, `debian-gcc-12-base-copyright.txt` |
 
 The Debian binaries are unmodified packages; their sources are at
