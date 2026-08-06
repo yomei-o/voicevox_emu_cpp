@@ -96,6 +96,23 @@ against the real libraries, and it works: the CUDA provider comes up, the model
 decrypts, and the audio is audible. So the shim has an unambiguous target rather
 than an argument.
 
+And the audio it makes is the audio everything else here makes. The same
+utterance, through four very different machines:
+
+| "あ", 0.52 s of audio | largest sample difference | against a peak of 3912 |
+| --- | --- | --- |
+| a Tesla T4, against native CPU | 2 | 0.051 % |
+| a Tesla T4, against `x86emu` | 2 | 0.051 % |
+| a Tesla T4, against the browser | 2 | 0.051 % |
+
+and for "ずんだもんなのだ", 1.45 s: 1 of 12988 against native, 8 against the
+emulator. Under a tenth of a percent every way you cut it - which is the last
+thing this project needed to say. Not "it ran under an emulator", but **the
+same answer as the dedicated hardware**, from a CPU that is software, in a
+browser tab.
+
+`web/sample/gpu_*.wav` are the T4's own output, kept beside the emulator's.
+
 Four things went wrong getting there, and all four failed in a way that pointed
 somewhere else. They are written down because each would cost an hour again:
 

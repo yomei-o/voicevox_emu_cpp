@@ -159,11 +159,13 @@ drives the demo page in a headless browser, waits it out, and pulls the WAV back
 out of the page; the bytes it gets are **identical** to the x86-64 build's, and
 within 3 of 3912 of native `libvoicevox_core`. Slow, and the same answer.
 
-And the audio that comes out is the real thing. Against a native run of the same
-text, `tools/wavcmp.mjs` puts the largest sample difference at 3 against a peak
-of 3912 for one, and 7 against 12988 for the other - under a tenth of a percent,
-which is `RSQRTPS` and `RCPPS` being *approximate* instructions that hardware
-answers to twelve bits and this emulator computes exactly.
+And the audio that comes out is the real thing. The same utterance was made four
+ways - on a Tesla T4 through the CUDA build, on a Linux CPU, under `x86emu`, and
+in a browser tab - and `tools/wavcmp.mjs` puts every pair within **8 of 12988**,
+under a tenth of a percent. Not "it ran under an emulator": the same answer as
+the dedicated hardware. What difference there is comes from `RSQRTPS` and
+`RCPPS` being *approximate* instructions that hardware answers to twelve bits
+and this emulator computes exactly.
 
 Two things make the gap that large. The interpreter retires tens of millions of
 instructions a second where the machine does billions; and CPUID here advertises
