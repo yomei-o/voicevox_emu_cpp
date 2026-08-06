@@ -102,6 +102,44 @@ print('sys.dic', f"{os.path.getsize('open_jtalk_dic_utf_8-1.11/sys.dic'):,}", 'b
 """),
 
 md("""
+### The CUDA libraries the provider actually wants
+
+`libvoicevox_onnxruntime_providers_cuda.so` is linked against **cuDNN 8**, and a
+current Colab image ships cuDNN 9 - so loading it fails with
+`libcudnn.so.8: cannot open shared object file`. NVIDIA publishes the 8 series
+on PyPI, which needs no root and lands in site-packages.
+"""),
+
+code("""
+import glob, os, subprocess, sys
+
+def find(soname):
+    hits = []
+    for root in ['/usr/local', '/usr/lib', '/opt',
+                 os.path.dirname(os.path.dirname(sys.executable)) + '/lib']:
+        hits += glob.glob(f'{root}/**/{soname}', recursive=True)
+    return sorted(set(os.path.dirname(h) for h in hits))
+
+if not find('libcudnn.so.8'):
+    print('installing cuDNN 8 for CUDA 12')
+    subprocess.run([sys.executable, '-m', 'pip', 'install', '-q',
+                    'nvidia-cudnn-cu12==8.9.7.29'], check=True)
+
+dirs = []
+for so in ['libcudnn.so.8', 'libcublas.so.12', 'libcublasLt.so.12',
+           'libcufft.so.11', 'libcudart.so.12']:
+    d = find(so)
+    print(f'{so:22} {d[0] if d else "NOT FOUND"}')
+    dirs += d
+
+# Everything the provider needs, ahead of whatever else is on the path.
+LD = ':'.join(dict.fromkeys(dirs + ['/content/vv', '/usr/local/cuda/lib64']))
+os.environ['LD_LIBRARY_PATH'] = LD
+print()
+print('LD_LIBRARY_PATH =', LD)
+"""),
+
+md("""
 ## 2. A plain `.onnx` to start with
 
 `predict_duration.onnx` is the small model VOICEVOX ships for testing — no
@@ -123,12 +161,12 @@ subprocess.run(['curl', '-sfL', '-o', 'predict_duration.onnx',
 
 code("""
 print('================ CPU provider (the arithmetic everyone agrees on)')
-!LD_LIBRARY_PATH=. ./cudaprobe ./libvoicevox_onnxruntime.so.{VV_ORT} ./predict_duration.onnx --cpu 2>/dev/null | tail -20
+!LD_LIBRARY_PATH=$LD_LIBRARY_PATH ./cudaprobe ./libvoicevox_onnxruntime.so.{VV_ORT} ./predict_duration.onnx --cpu 2>/dev/null | tail -20
 """),
 
 code("""
 print('================ CUDA provider, on the real GPU')
-!LD_LIBRARY_PATH=. ./cudaprobe ./libvoicevox_onnxruntime.so.{VV_ORT} ./predict_duration.onnx 2>/dev/null | tail -20
+!LD_LIBRARY_PATH=$LD_LIBRARY_PATH ./cudaprobe ./libvoicevox_onnxruntime.so.{VV_ORT} ./predict_duration.onnx 2>/dev/null | tail -20
 """),
 
 md("""
@@ -146,7 +184,7 @@ voice model, and speak. Here it does it for real.
 
 code("""
 print('================ the full pipeline on the GPU')
-!LD_LIBRARY_PATH=. ./cudavvm ./libvoicevox_onnxruntime.so.{VV_ORT} ./open_jtalk_dic_utf_8-1.11 ./{VVM} 3 2>&1 | grep -v '^kernel ' | tail -25
+!LD_LIBRARY_PATH=$LD_LIBRARY_PATH ./cudavvm ./libvoicevox_onnxruntime.so.{VV_ORT} ./open_jtalk_dic_utf_8-1.11 ./{VVM} 3 2>&1 | grep -v '^kernel ' | tail -25
 """),
 
 md("""
@@ -191,8 +229,8 @@ int main(int argc, char** argv) {
 '''
 open('gpusay.c', 'w').write(say_c)
 !gcc -O2 -Wall -I. -o gpusay gpusay.c -L. -lvoicevox_core -Wl,-rpath,'$ORIGIN'
-!LD_LIBRARY_PATH=. ./gpusay ./libvoicevox_onnxruntime.so.{VV_ORT} ./open_jtalk_dic_utf_8-1.11 ./{VVM} 'あ' 3 gpu_a.wav 2>&1 | tail -3
-!LD_LIBRARY_PATH=. ./gpusay ./libvoicevox_onnxruntime.so.{VV_ORT} ./open_jtalk_dic_utf_8-1.11 ./{VVM} 'ずんだもんなのだ' 3 gpu_zundamon.wav 2>&1 | tail -3
+!LD_LIBRARY_PATH=$LD_LIBRARY_PATH ./gpusay ./libvoicevox_onnxruntime.so.{VV_ORT} ./open_jtalk_dic_utf_8-1.11 ./{VVM} 'あ' 3 gpu_a.wav 2>&1 | tail -3
+!LD_LIBRARY_PATH=$LD_LIBRARY_PATH ./gpusay ./libvoicevox_onnxruntime.so.{VV_ORT} ./open_jtalk_dic_utf_8-1.11 ./{VVM} 'ずんだもんなのだ' 3 gpu_zundamon.wav 2>&1 | tail -3
 """),
 
 code("""

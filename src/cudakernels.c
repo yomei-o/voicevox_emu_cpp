@@ -130,12 +130,62 @@ static int do_unary(const char* name, void** args) {
 
 typedef int (*Handler)(const char* name, void** args);
 
+// Not implemented yet, but listed so their arguments can be dumped safely:
+// `cudaLaunchKernel` gives no argument count, so walking the array without one
+// reads past the end and segfaults.  The count comes from the signature.
+static int do_dump_only(const char* name, void** args) {
+    (void)name;
+    (void)args;
+    return 0;
+}
+
+// The divisor is the first field, and it is the only one needed: `M_` and `l_`
+// are a multiply-and-shift standing in for the division, which plain arithmetic
+// does just as correctly and rather more legibly.
+static void divmod(const DivMod* f, int n, int* q, int* r) {
+    *q = n / f->d_;
+    *r = n - *q * f->d_;
+}
+
+// void ExpandKernel2D<T>(int N, const T* in, T* out, DivMod<int> fdm_out_stride0,
+//                        int in_view_stride0, int in_view_stride1)
+// Each output position splits into (row, column) by the output's row stride,
+// and reads through the input's own strides - which are zero along whichever
+// axis is being expanded.
+static int do_expand2d(const char* name, void** args) {
+    if (!strstr(name, "ExpandKernel2DIi") && !strstr(name, "ExpandKernel2DIl")) return 0;
+    int is64 = strstr(name, "ExpandKernel2DIl") != NULL;
+    int n = ARG(int, 0);
+    const void* in = ARG(const void*, 1);
+    void* out = ARG(void*, 2);
+    const DivMod* fdm = (const DivMod*)args[3];
+    int s0 = ARG(int, 4), s1 = ARG(int, 5);
+    for (int i = 0; i < n; i++) {
+        int r, c;
+        divmod(fdm, i, &r, &c);
+        long src = (long)r * s0 + (long)c * s1;
+        if (is64)
+            ((long long*)out)[i] = ((const long long*)in)[src];
+        else
+            ((int*)out)[i] = ((const int*)in)[src];
+    }
+    return 1;
+}
+
 static const struct {
     const char* key;
     int nargs;
     Handler fn;
 } kKernels[] = {
     {"_UnaryElementWiseI", 4, do_unary},
+    // void ExpandKernel2D<T>(int, const T*, T*, DivMod<int>, int, int)
+    {"ExpandKernel2DI", 6, do_expand2d},
+    // void _GatherKernel<T>(long, long, DivMod<int>, DivMod<int>, const void*,
+    //                       unsigned long, const T*, T*, int)
+    {"_GatherKernelI", 9, do_dump_only},
+    // void _ConcatKernel<T>(DivMod<int>, DivMod<int>, const long*, const long*,
+    //                       const long*, T*, const void**, int)
+    {"_ConcatKernelI", 8, do_dump_only},
 };
 
 // Returns 1 when the launch was handled, 0 when nothing here knows it yet.
