@@ -82,7 +82,11 @@ static int write_file(const char* path, const void* data, size_t n) {
 int main(int argc, char** argv) {
     // Under the emulator a single call can take ten minutes, and a run whose
     // output only appears at the end cannot be watched at all.
-    setvbuf(stdout, NULL, _IOLBF, 0);
+    //
+    // Unbuffered rather than line buffered: MSVC does not implement _IOLBF, and
+    // `setvbuf(stdout, NULL, _IOLBF, 0)` is an *invalid parameter* there - which
+    // its CRT answers by killing the process, with no message and exit code 127.
+    setvbuf(stdout, NULL, _IONBF, 0);
 
     int no_audio = 0;
     for (int i = 1; i < argc; i++)
