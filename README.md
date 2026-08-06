@@ -163,9 +163,18 @@ instructions a second where the machine does billions; and CPUID here advertises
 SSE2 only, so ORT's kernels take their slowest path — which is also true of qemu,
 and is why qemu's own numbers are nothing like native.
 
+The second of those looked like the lever and is not. SSSE3 and SSE4.1 are
+implemented now and verified (isatest, 303 groups, native and wasm both matching
+a real CPU and qemu), so advertising them is two lines. With them advertised the
+whole pipeline still works — and the WAV that comes out is *bit-identical* to the
+SSE2-only one, which says ONNX Runtime did not change which kernels it runs. The
+fast paths want AVX2 and FMA, which is a much larger job, though a bounded one
+now that there is a way to check each instruction.
+
 A one-entry-per-slot page cache in `Memory::host_ptr` (this repo's copy of the
-emulator has it) took the worst of the hash-table lookups out. Seconds rather
-than minutes needs a JIT, which is a different project.
+emulator has it) took the worst of the hash-table lookups out, worth about 25 %
+on a memory-bound guest. Seconds rather than minutes needs a JIT, which is a
+different project.
 
 ## Layout
 
