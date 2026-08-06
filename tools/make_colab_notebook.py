@@ -121,28 +121,39 @@ on PyPI, which needs no root and lands in site-packages.
 code("""
 import glob, os, subprocess, sys
 
-def find(soname):
+def find(soname, roots=None):
+    roots = roots or ['/usr/local', '/usr/lib', '/opt',
+                      os.path.dirname(os.path.dirname(sys.executable)) + '/lib']
     hits = []
-    for root in ['/usr/local', '/usr/lib', '/opt',
-                 os.path.dirname(os.path.dirname(sys.executable)) + '/lib']:
+    for root in roots:
         hits += glob.glob(f'{root}/**/{soname}', recursive=True)
     return sorted(set(os.path.dirname(h) for h in hits))
 
+# Only cuDNN comes from pip.  The rest - cudart, cuBLAS, cuFFT - must be the
+# ones the *driver* on this machine supports: a pip wheel can be a newer CUDA
+# minor than the driver, and then cudaSetDevice fails with
+# "CUDA driver version is insufficient for CUDA runtime version" (error 35).
 if not find('libcudnn.so.8'):
     print('installing cuDNN 8 for CUDA 12')
     subprocess.run([sys.executable, '-m', 'pip', 'install', '-q',
                     'nvidia-cudnn-cu12==8.9.7.29'], check=True)
 
-dirs = []
-for so in ['libcudnn.so.8', 'libcublas.so.12', 'libcublasLt.so.12',
-           'libcufft.so.11', 'libcudart.so.12']:
-    d = find(so)
-    print(f'{so:22} {d[0] if d else "NOT FOUND"}')
-    dirs += d
+cudnn_dirs = find('libcudnn.so.8')
+system_dirs = [d for d in ['/usr/local/cuda/lib64', '/usr/local/cuda/targets/x86_64-linux/lib',
+                           '/usr/lib/x86_64-linux-gnu'] if os.path.isdir(d)]
 
-# Everything the provider needs, ahead of whatever else is on the path.
-LD = ':'.join(dict.fromkeys(dirs + ['/content/vv', '/usr/local/cuda/lib64']))
+# System first, so the driver's own cudart wins; cuDNN 8 after it, only for the
+# one library the system does not have.
+LD = ':'.join(dict.fromkeys(system_dirs + cudnn_dirs + ['/content/vv']))
 os.environ['LD_LIBRARY_PATH'] = LD
+
+print('driver / runtime as the system sees them:')
+!nvidia-smi | grep -E 'Driver Version|CUDA Version'
+print()
+for so in ['libcudart.so.12', 'libcublas.so.12', 'libcublasLt.so.12',
+           'libcufft.so.11', 'libcudnn.so.8']:
+    found = next((d for d in LD.split(':') if os.path.exists(f'{d}/{so}')), None)
+    print(f'{so:22} {found or "NOT FOUND on the path"}')
 print()
 print('LD_LIBRARY_PATH =', LD)
 """),
