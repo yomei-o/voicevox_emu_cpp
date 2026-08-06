@@ -38,3 +38,4 @@ emu_isatest_new.txt
 web_out.wav
 web/guest/probe
 guest/analyze
+build/isatest_*.txt

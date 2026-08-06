@@ -50,15 +50,17 @@ about a second there, which makes it the half of VOICEVOX a browser can do
 interactively. Synthesis in a tab is real but takes hours, so the page ships the
 WAVs this machine produced and says exactly what they cost.
 
-    node web/test_node.mjs isatest  # is the wasm build's arithmetic right?
     node web/test_page.mjs          # the page's own path, in node
     node tools/browser_test.mjs     # the page, in a headless browser
     node tools/browser_test.mjs --url https://yomei-o.github.io/voicevox_emu_cpp/web/
 
-Run the first of those after touching the emulator. A WebAssembly build is a
-different compiler on a different target, and undefined behaviour that happens
-to be right on x86 is not right there — which is exactly how the conversion bug
-below was found.
+Run the instruction check after touching the emulator, both ways — a
+WebAssembly build is a different compiler on a different target, and undefined
+behaviour that happens to be right on x86 is not right there, which is exactly
+how the conversion bug below was found:
+
+    sh tools/check_isa.sh          # the native build
+    sh tools/check_isa.sh wasm     # and the browser one
 
 ### What it took
 
