@@ -82,7 +82,11 @@ def get(url, out):
 get(f'https://github.com/VOICEVOX/onnxruntime-builder/releases/download/voicevox_onnxruntime-{VV_ORT}/voicevox_onnxruntime-linux-x64-cuda-{VV_ORT}.tgz', 'ort.tgz')
 get(f'https://github.com/VOICEVOX/voicevox_core/releases/download/{VV_CORE}/voicevox_core-linux-x64-{VV_CORE}.zip', 'core.zip')
 get(f'https://github.com/VOICEVOX/voicevox_vvm/releases/download/{VV_VVM}/{VVM}', VVM)
-get('https://sourceforge.net/projects/open-jtalk/files/Dictionary/open_jtalk_dic-1.11/open_jtalk_dic_utf_8-1.11.tar.gz/download', 'ojdic.tar.gz')
+# The dictionary from this repository rather than from SourceForge: SourceForge
+# redirects to a mirror, and from Colab that mirror is often unreachable
+# (curl exit 7 behind an http 302).  It is the same archive - see
+# licenses/README.md - and it is already here.
+get('https://raw.githubusercontent.com/yomei-o/voicevox_emu_cpp/main/guest/open_jtalk_dic_utf_8-1.11.tar.gz', 'ojdic.tar.gz')
 
 !tar xzf ort.tgz && unzip -oq core.zip && tar xzf ojdic.tar.gz
 !cp voicevox_onnxruntime-linux-x64-cuda-{VV_ORT}/lib/*.so* .

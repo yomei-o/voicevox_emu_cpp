@@ -8,11 +8,23 @@
 //
 // VVSTUB_TRACE=1 makes every stub announce itself, which is how you find the
 // call that mattered after something goes wrong.
+//
+// The linkage matters.  libcudnn's stand-in is built as C++ because its real
+// entry points use Eigen, and a C++ compiler would give every stub a mangled
+// name - which is not the name the provider imports, and shows up as
+// `undefined symbol: _Z11vvstub_notePKc` at load.
 #ifndef CUDASTUB_H
 #define CUDASTUB_H
 
 #include <stdio.h>
 #include <stdlib.h>
+
+#ifdef __cplusplus
+#define VVSTUB_C extern "C"
+extern "C" {
+#else
+#define VVSTUB_C
+#endif
 
 extern int vvstub_trace;
 void vvstub_note(const char* name);
@@ -21,9 +33,13 @@ void vvstub_note(const char* name);
 // and answers 0 when it does not.
 int vvstub_run_kernel(const char* name, void** args);
 
+#ifdef __cplusplus
+}
+#endif
+
 #define VVSTUB(name)                          \
-    int name();                               \
-    int name() {                              \
+    VVSTUB_C int name();                      \
+    VVSTUB_C int name() {                     \
         if (vvstub_trace) vvstub_note(#name); \
         return 0;                             \
     }

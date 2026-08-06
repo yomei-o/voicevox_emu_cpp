@@ -51,7 +51,17 @@ cudaDeviceGetAttribute|cudaRuntimeGetVersion|cudaGetErrorString|cudaGetErrorName
 cudaStreamCreateWithFlags|cudaStreamDestroy|cudaStreamSynchronize|cudaMemGetInfo|\
 cudaMemcpy2DAsync|__cudaRegisterFatBinary|__cudaRegisterFatBinaryEnd|\
 __cudaRegisterFunction|__cudaRegisterVar|__cudaUnregisterFatBinary|\
-__cudaPushCallConfiguration|__cudaPopCallConfiguration)
+__cudaPushCallConfiguration|__cudaPopCallConfiguration|\
+cudnnCreateTensorDescriptor|cudnnDestroyTensorDescriptor|\
+cudnnSetTensorNdDescriptor|cudnnSetTensor4dDescriptor|\
+cudnnCreateFilterDescriptor|cudnnDestroyFilterDescriptor|\
+cudnnSetFilterNdDescriptor|cudnnCreateConvolutionDescriptor|\
+cudnnDestroyConvolutionDescriptor|cudnnSetConvolutionNdDescriptor|\
+cudnnSetConvolutionGroupCount|cudnnGetConvolutionForwardWorkspaceSize|\
+cudnnGetConvolutionBackwardDataWorkspaceSize|\
+cudnnFindConvolutionForwardAlgorithmEx|\
+cudnnFindConvolutionBackwardDataAlgorithmEx|\
+cudnnAddTensor|cudnnConvolutionForward|cudnnConvolutionBackwardData)
                     ;;
                 *)
                     echo "VVSTUB($sym)"
@@ -66,7 +76,14 @@ echo "== compiling"
 for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libcudnn.so.8 libcufft.so.11; do
     base=$(echo "$lib" | sed 's/\.so\..*//')
     extra=""
+    cc="gcc -O2"
     [ "$base" = libcudart ] && extra="src/cudastub.c src/cudakernels.c"
+    if [ "$base" = libcudnn ]; then
+        # The convolutions are C++ and use Eigen, so this one needs a C++
+        # compiler.  tools/get_gpp_nosudo.sh provides one where apt cannot.
+        extra="src/cudnn_real.cpp"
+        cc="${CXX:-$HOME/gpp/bin/g++} -O2 -Ithird_party/eigen_flat"
+    fi
 
     # The real CUDA libraries version their symbols, and the provider's
     # references carry those versions: `cudaMalloc@libcudart.so.12`.  A stand-in
@@ -75,7 +92,7 @@ for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libcudnn.so.8 libcu
     # put everything in it.
     printf '%s {\n  global: *;\n};\n' "$lib" > "$OUT/$base.map"
 
-    gcc -O1 -fPIC -shared -Isrc -o "$OUT/$lib" "$OUT/$base.c" $extra \
+    $cc -fPIC -shared -Isrc -o "$OUT/$lib" "$OUT/$base.c" $extra \
         -Wl,-soname,"$lib" -Wl,--version-script="$OUT/$base.map"
     ls -l "$OUT/$lib" | awk '{print "   " $9, $5 " bytes"}'
 done
