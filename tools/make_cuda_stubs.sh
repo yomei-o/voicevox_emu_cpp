@@ -61,7 +61,7 @@ cudnnSetConvolutionGroupCount|cudnnGetConvolutionForwardWorkspaceSize|\
 cudnnGetConvolutionBackwardDataWorkspaceSize|\
 cudnnFindConvolutionForwardAlgorithmEx|\
 cudnnFindConvolutionBackwardDataAlgorithmEx|\
-cudnnAddTensor|cudnnConvolutionForward|cudnnConvolutionBackwardData)
+cudnnAddTensor|cudnnConvolutionForward|cudnnConvolutionBackwardData|cublasCreate_v2|cublasDestroy_v2|cublasSetStream_v2|cublasGetStream_v2|cublasSetMathMode|cublasGetMathMode|cublasSetPointerMode_v2|cublasSgemm_v2|cublasSgemmStridedBatched|cublasSgeam)
                     ;;
                 *)
                     echo "VVSTUB($sym)"
@@ -78,6 +78,10 @@ for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libcudnn.so.8 libcu
     extra=""
     cc="gcc -O2"
     [ "$base" = libcudart ] && extra="src/cudastub.c src/cudakernels.c"
+    if [ "$base" = libcublas ]; then
+        extra="src/cublas_real.cpp"
+        cc="${CXX:-$HOME/gpp/bin/g++} -O2 -Ithird_party/eigen_flat"
+    fi
     if [ "$base" = libcudnn ]; then
         # The convolutions are C++ and use Eigen, so this one needs a C++
         # compiler.  tools/get_gpp_nosudo.sh provides one where apt cannot.

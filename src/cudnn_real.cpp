@@ -16,6 +16,7 @@
 // spent a day learning to avoid.
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -68,6 +69,10 @@ using ConstMatrixMap = Eigen::Map<const Matrix>;
 // is the same thing.
 struct Shape1D {
     int n = 1, c = 1, len = 1;
+    // Which spatial slot the extent came from, counting from the first spatial
+    // dimension.  The convolution descriptor's pad/stride/dilation arrays are in
+    // that same order, so this is the index to read them at.
+    int sp = 0;
     bool ok = false;
 };
 
@@ -77,15 +82,22 @@ Shape1D as_1d(const TensorDesc& t) {
         s.n = t.dim[0];
         s.c = t.dim[1];
         s.len = t.dim[2];
+        s.sp = 0;
         s.ok = true;
     } else if (t.nb == 4) {  // NCHW, with one of the spatial dims degenerate
         s.n = t.dim[0];
         s.c = t.dim[1];
-        if (t.dim[2] == 1) {
-            s.len = t.dim[3];
-            s.ok = true;
-        } else if (t.dim[3] == 1) {
+        // ONNX Runtime stores a 1-D convolution as [N, C, W, 1] - the extent is
+        // the *height* slot and the width is the degenerate one.  Reading the
+        // last slot instead gets pad = 0 where the model asked for 2, and every
+        // convolution then shifts its output by that much.
+        if (t.dim[3] == 1) {
             s.len = t.dim[2];
+            s.sp = 0;
+            s.ok = true;
+        } else if (t.dim[2] == 1) {
+            s.len = t.dim[3];
+            s.sp = 1;
             s.ok = true;
         }
     }
@@ -268,10 +280,26 @@ int cudnnConvolutionForward(void*, const void* alpha, void* xDesc, const void* x
     for (int i = 2; i < wd->nb; i++) k *= wd->dim[i];
 
     int groups = cd->groups > 0 ? cd->groups : 1;
-    // The spatial parameters live in the last position: a 2-D descriptor over a
-    // degenerate height carries the real values there.
-    int sp = cd->nb > 0 ? cd->nb - 1 : 0;
+    // Read pad/stride/dilation at the slot the extent came from, not at a fixed
+    // one - see as_1d.
+    int sp = xs.sp < cd->nb ? xs.sp : 0;
     int pad = cd->pad[sp], stride = cd->stride[sp], dilation = cd->dilation[sp];
+
+    if (getenv("VVSTUB_TRACE")) {
+        auto dims = [](const int* d, int nb, char* buf) {
+            int o = 0;
+            for (int i = 0; i < nb; i++) o += sprintf(buf + o, "%s%d", i ? "," : "", d[i]);
+            if (!nb) buf[0] = 0;
+            return buf;
+        };
+        char bx[64], bw[64], by[64], bp[64], bs[64], bd[64];
+        fprintf(stderr,
+                "[conv] x[%d]=%s w[%d]=%s y[%d]=%s conv nb=%d pad=%s stride=%s dil=%s "
+                "groups=%d\n",
+                xd->nb, dims(xd->dim, xd->nb, bx), wd->nb, dims(wd->dim, wd->nb, bw),
+                yd->nb, dims(yd->dim, yd->nb, by), cd->nb, dims(cd->pad, cd->nb, bp),
+                dims(cd->stride, cd->nb, bs), dims(cd->dilation, cd->nb, bd), groups);
+    }
 
     float al = alpha ? *(const float*)alpha : 1.0f;
     float be = beta ? *(const float*)beta : 0.0f;
@@ -325,7 +353,7 @@ int cudnnConvolutionBackwardData(void*, const void* alpha, void* wDesc,
     int k = 1;
     for (int i = 2; i < wd->nb; i++) k *= wd->dim[i];
     int groups = cd->groups > 0 ? cd->groups : 1;
-    int sp = cd->nb > 0 ? cd->nb - 1 : 0;
+    int sp = xs.sp < cd->nb ? xs.sp : 0;
     int pad = cd->pad[sp], stride = cd->stride[sp], dilation = cd->dilation[sp];
 
     float al = alpha ? *(const float*)alpha : 1.0f;

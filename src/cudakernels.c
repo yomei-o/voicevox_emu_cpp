@@ -172,6 +172,94 @@ static int do_expand2d(const char* name, void** args) {
     return 1;
 }
 
+// An index array is int32 or int64 depending on what the graph declared, and
+// the kernel is told which by the element size rather than by its type.
+static long long index_at(const void* data, unsigned long elem_size, int i) {
+    if (elem_size == 4) return ((const int*)data)[i];
+    return ((const long long*)data)[i];
+}
+
+// void _GatherKernel<T>(long input_block_size, long indices_max,
+//                       DivMod<int> output_block_size, DivMod<int> block_size,
+//                       const void* indices, unsigned long index_element_size,
+//                       const T* input, T* output, int N)
+//
+// Every output position decomposes twice: once to find which block of the input
+// it belongs to, and once to split that block into "which index" and "where
+// within the indexed row".  A negative index counts from the end, and one that
+// is still out of range writes a zero rather than reading wild.
+static int do_gather(const char* name, void** args) {
+    int width = strstr(name, "_GatherKernelIi") ? 4
+              : strstr(name, "_GatherKernelIl") ? 8
+              : strstr(name, "_GatherKernelIf") ? 4
+              : 0;
+    if (!width) return 0;
+    long long input_block_size = ARG(long long, 0);
+    long long indices_max = ARG(long long, 1);
+    const DivMod* out_block = (const DivMod*)args[2];
+    const DivMod* block = (const DivMod*)args[3];
+    const void* indices = ARG(const void*, 4);
+    unsigned long index_size = ARG(unsigned long, 5);
+    const char* in = ARG(const char*, 6);
+    char* out = ARG(char*, 7);
+    int n = ARG(int, 8);
+
+    for (int id = 0; id < n; id++) {
+        int input_block_index, block_offset;
+        divmod(out_block, id, &input_block_index, &block_offset);
+        int indices_index, offset;
+        divmod(block, block_offset, &indices_index, &offset);
+        long long idx = index_at(indices, index_size, indices_index);
+        if (idx < 0) idx += indices_max;
+        if (idx < 0 || idx >= indices_max) {
+            memset(out + (long)id * width, 0, width);
+            continue;
+        }
+        long long src = input_block_index * input_block_size + idx * block->d_ + offset;
+        memcpy(out + (long)id * width, in + src * width, width);
+    }
+    return 1;
+}
+
+// void _ConcatKernel<T>(DivMod<int> block_size_including_axis_dim,
+//                       DivMod<int> block_size_inside_axis_dim,
+//                       const long* concat_sizes, const long* concat_sizes_range,
+//                       const long* axis_dimension_input_output_mapping,
+//                       T* output, const void** inputs, int N)
+//
+// The same decomposition, but the middle index says which *input* the position
+// came from, and the running total says how far into that input it is.
+static int do_concat(const char* name, void** args) {
+    int width = strstr(name, "_ConcatKernelIi") ? 4
+              : strstr(name, "_ConcatKernelIl") ? 8
+              : strstr(name, "_ConcatKernelIf") ? 4
+              : 0;
+    if (!width) return 0;
+    const DivMod* outer = (const DivMod*)args[0];
+    const DivMod* inside = (const DivMod*)args[1];
+    const long long* concat_sizes = ARG(const long long*, 2);
+    const long long* concat_range = ARG(const long long*, 3);
+    const long long* mapping = ARG(const long long*, 4);
+    char* out = ARG(char*, 5);
+    const void** inputs = ARG(const void**, 6);
+    int n = ARG(int, 7);
+
+    for (int id = 0; id < n; id++) {
+        int outer_block_index, rest;
+        divmod(outer, id, &outer_block_index, &rest);
+        int block_index, offset;
+        divmod(inside, rest, &block_index, &offset);
+        int input_index = (int)mapping[block_index];
+        long long range_left = input_index == 0 ? 0 : concat_range[input_index - 1];
+        long long block_offset = block_index - range_left;
+        const char* in = (const char*)inputs[input_index];
+        long long src = (long long)outer_block_index * concat_sizes[input_index] * inside->d_ +
+                        block_offset * inside->d_ + offset;
+        memcpy(out + (long)id * width, in + src * width, width);
+    }
+    return 1;
+}
+
 static const struct {
     const char* key;
     int nargs;
@@ -182,10 +270,10 @@ static const struct {
     {"ExpandKernel2DI", 6, do_expand2d},
     // void _GatherKernel<T>(long, long, DivMod<int>, DivMod<int>, const void*,
     //                       unsigned long, const T*, T*, int)
-    {"_GatherKernelI", 9, do_dump_only},
+    {"_GatherKernelI", 9, do_gather},
     // void _ConcatKernel<T>(DivMod<int>, DivMod<int>, const long*, const long*,
     //                       const long*, T*, const void**, int)
-    {"_ConcatKernelI", 8, do_dump_only},
+    {"_ConcatKernelI", 8, do_concat},
 };
 
 // Returns 1 when the launch was handled, 0 when nothing here knows it yet.
