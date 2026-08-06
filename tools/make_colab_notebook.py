@@ -119,7 +119,7 @@ on PyPI, which needs no root and lands in site-packages.
 """),
 
 code("""
-import glob, os, subprocess, sys
+import glob, os, re, subprocess, sys
 
 def find(soname, roots=None):
     roots = roots or ['/usr/local', '/usr/lib', '/opt',
@@ -129,31 +129,57 @@ def find(soname, roots=None):
         hits += glob.glob(f'{root}/**/{soname}', recursive=True)
     return sorted(set(os.path.dirname(h) for h in hits))
 
-# Only cuDNN comes from pip.  The rest - cudart, cuBLAS, cuFFT - must be the
-# ones the *driver* on this machine supports: a pip wheel can be a newer CUDA
-# minor than the driver, and then cudaSetDevice fails with
-# "CUDA driver version is insufficient for CUDA runtime version" (error 35).
-if not find('libcudnn.so.8'):
-    print('installing cuDNN 8 for CUDA 12')
-    subprocess.run([sys.executable, '-m', 'pip', 'install', '-q',
-                    'nvidia-cudnn-cu12==8.9.7.29'], check=True)
+def pip(*pkgs):
+    print('installing', ' '.join(pkgs))
+    subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', *pkgs], check=True)
 
+# What CUDA version will the *driver* accept?  nvidia-smi reports the highest.
+smi = subprocess.run(['nvidia-smi'], capture_output=True, text=True).stdout
+m = re.search(r'CUDA Version:\s*(\d+)\.(\d+)', smi)
+driver_cuda = (int(m.group(1)), int(m.group(2))) if m else (12, 0)
+print('driver accepts CUDA up to', '%d.%d' % driver_cuda)
+
+# And which cudart is on the machine?  Colab ships a toolkit that can be newer
+# than its driver, and then cudaSetDevice fails with error 35, "CUDA driver
+# version is insufficient for CUDA runtime version".  That is not a warning
+# about performance - nothing runs at all.
+toolkits = sorted(glob.glob('/usr/local/cuda-*/lib64/libcudart.so.12'))
+sys_ver = None
+for t in toolkits:
+    mm = re.search(r'cuda-(\d+)\.(\d+)', t)
+    if mm:
+        sys_ver = (int(mm.group(1)), int(mm.group(2)))
+print('system toolkit provides CUDA', '%d.%d' % sys_ver if sys_ver else 'unknown')
+
+cudart_dirs = []
+if sys_ver and sys_ver > driver_cuda:
+    # A cudart no newer than the driver, which pip can pick by upper bound.
+    print(f'the toolkit is newer than the driver; fetching a cudart <= '
+          f'{driver_cuda[0]}.{driver_cuda[1]}')
+    pip(f'nvidia-cuda-runtime-cu12<{driver_cuda[0]}.{driver_cuda[1] + 1}')
+    cudart_dirs = find('libcudart.so.12', [os.path.dirname(os.path.dirname(sys.executable)) + '/lib'])
+
+if not find('libcudnn.so.8'):
+    pip('nvidia-cudnn-cu12==8.9.7.29')
 cudnn_dirs = find('libcudnn.so.8')
-system_dirs = [d for d in ['/usr/local/cuda/lib64', '/usr/local/cuda/targets/x86_64-linux/lib',
+
+system_dirs = [d for d in ['/usr/local/cuda/lib64',
+                           '/usr/local/cuda/targets/x86_64-linux/lib',
                            '/usr/lib/x86_64-linux-gnu'] if os.path.isdir(d)]
 
-# System first, so the driver's own cudart wins; cuDNN 8 after it, only for the
-# one library the system does not have.
-LD = ':'.join(dict.fromkeys(system_dirs + cudnn_dirs + ['/content/vv']))
+# A cudart the driver accepts first, then cuDNN 8, then the system for the rest.
+LD = ':'.join(dict.fromkeys(cudart_dirs + cudnn_dirs + system_dirs + ['/content/vv']))
 os.environ['LD_LIBRARY_PATH'] = LD
 
-print('driver / runtime as the system sees them:')
-!nvidia-smi | grep -E 'Driver Version|CUDA Version'
 print()
 for so in ['libcudart.so.12', 'libcublas.so.12', 'libcublasLt.so.12',
            'libcufft.so.11', 'libcudnn.so.8']:
     found = next((d for d in LD.split(':') if os.path.exists(f'{d}/{so}')), None)
-    print(f'{so:22} {found or "NOT FOUND on the path"}')
+    if found:
+        real = os.path.basename(os.path.realpath(f'{found}/{so}'))
+        print(f'{so:22} {real:28} {found}')
+    else:
+        print(f'{so:22} NOT FOUND on the path')
 print()
 print('LD_LIBRARY_PATH =', LD)
 """),
