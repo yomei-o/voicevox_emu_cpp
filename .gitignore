@@ -22,3 +22,15 @@ emu_isatest.txt
 api_*.txt
 guest/shldtest
 guest/vvagent
+
+# Build products of the API layer.
+build/
+voicevox_core.dll
+voicevox_core.lib
+voicevox_core.exp
+libvoicevox_core_emu.so
+apitest.exe
+vvsay.exe
+sysroot/opt/vv/vvagent
+*.log
+emu_isatest_new.txt

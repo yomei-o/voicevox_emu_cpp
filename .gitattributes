@@ -6,4 +6,6 @@
 *.h text eol=lf
 *.inc text eol=lf
 *.cpp text eol=lf
-*.txt text
+# LF, not the platform's: qemu_ref.txt is diffed against output the emulator
+# writes with LF, and the text files are read by a guest.
+*.txt text eol=lf
