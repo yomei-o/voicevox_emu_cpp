@@ -50,9 +50,15 @@ about a second there, which makes it the half of VOICEVOX a browser can do
 interactively. Synthesis in a tab is real but takes hours, so the page ships the
 WAVs this machine produced and says exactly what they cost.
 
-    node web/test_page.mjs        # the page's own path, in node
-    node tools/browser_test.mjs   # the page, in a headless browser
+    node web/test_node.mjs isatest  # is the wasm build's arithmetic right?
+    node web/test_page.mjs          # the page's own path, in node
+    node tools/browser_test.mjs     # the page, in a headless browser
     node tools/browser_test.mjs --url https://yomei-o.github.io/voicevox_emu_cpp/web/
+
+Run the first of those after touching the emulator. A WebAssembly build is a
+different compiler on a different target, and undefined behaviour that happens
+to be right on x86 is not right there — which is exactly how the conversion bug
+below was found.
 
 ### What it took
 
@@ -61,11 +67,11 @@ arriving were right, ORT was healthy, no I/O was involved, and AES-NI — added 
 suspicion — turned out never to execute. What was left was that some instruction
 computed the wrong answer.
 
-`src/isatest.c` found it. It runs 240 groups of instructions over operands
+`src/isatest.c` found them. It runs 240 groups of instructions over operands
 chosen to hit the edges, folds every result and every architecturally *defined*
 flag into a checksum, and prints one line per group. Run natively, under
 `qemu-x86_64` and under `x86emu`, the first two agree exactly — which is what
-makes a third answer mean something. Four bugs came out:
+makes a third answer mean something. Five bugs came out:
 
 | | |
 | --- | --- |
@@ -73,6 +79,7 @@ makes a third answer mean something. Four bugs came out:
 | **MINPS/MAXPS/MINPD/MAXPD** | The definition is `SRC1 < SRC2 ? SRC1 : SRC2`, and the `else` carries both the NaN case and the tie — which is how MINPD tells `+0.0` from `-0.0`. Testing `b < a` gets both wrong. |
 | **SHLD/SHRD with a count of zero** | Nothing shifts and no flag changes, but the destination register is still written, and a 32-bit write zeroes the upper half. Returning early left the old upper half in place. |
 | **SHLD/SHRD's OF** | Defined for a count of one, and unimplemented. |
+| **CVTPS2DQ and friends, in the wasm build only** | The conversion was a plain `static_cast<int32_t>(double)`, undefined when the value does not fit or is a NaN. Compiled for x86 that cast *becomes the instruction being emulated*; compiled to WebAssembly it becomes a trapping or saturating truncate. `to_int32_x86`/`to_int64_x86` in `cpu.h` now say what x86 means, and x87's FIST used the same pattern. |
 
 Two more emulator gaps turned up on the way: `statx` (syscall 332), and guest
 writes to stdout not being flushed out of the emulator's own stdio buffer, which

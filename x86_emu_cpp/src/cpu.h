@@ -18,6 +18,32 @@
 
 namespace x86emu {
 
+// Converting a floating point value to an integer the way x86 does: the value
+// arrives already rounded, and the answer is the destination's "integer
+// indefinite" - its INT_MIN - when it will not fit or the source is a NaN.
+//
+// These exist because writing it as a plain cast is undefined behaviour, and
+// undefined behaviour is not portable.  Compiled for x86 the cast becomes the
+// very instruction being emulated and looks perfectly correct; compiled to
+// WebAssembly it becomes a trapping or saturating truncate and quietly is not.
+// The comparisons are written so that a NaN fails them: NaN is not >= anything.
+inline int16_t to_int16_x86(double v) {
+    if (!(v >= -32768.0 && v <= 32767.0)) return INT16_MIN;
+    return static_cast<int16_t>(v);
+}
+
+inline int32_t to_int32_x86(double v) {
+    if (!(v >= -2147483648.0 && v <= 2147483647.0)) return INT32_MIN;
+    return static_cast<int32_t>(v);
+}
+
+inline int64_t to_int64_x86(double v) {
+    // 2^63 is exactly representable as a double; 2^63 - 1 is not, so the upper
+    // bound is strict against 2^63 rather than inclusive of INT64_MAX.
+    if (!(v >= -9223372036854775808.0 && v < 9223372036854775808.0)) return INT64_MIN;
+    return static_cast<int64_t>(v);
+}
+
 struct CpuError : std::runtime_error {
     uint64_t rip;
     CpuError(uint64_t rip_, const std::string& what)

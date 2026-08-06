@@ -144,29 +144,6 @@ Cpu::Xmm aes_inv_mix_columns(const Cpu::Xmm& s) {
 
 // MXCSR carries the same rounding-mode field as the x87 control word, in bits
 // 13-14.
-// Converting a float to an integer the way x86 does: round it, and answer with
-// the "integer indefinite" value - the destination's INT_MIN - when the result
-// will not fit or the source is a NaN.
-//
-// Writing that as a plain C++ cast is undefined behaviour, and undefined
-// behaviour is not portable.  Compiled for x86 the cast becomes the very
-// instruction being emulated and looks perfectly correct; compiled to
-// WebAssembly it becomes a trapping or saturating truncate and quietly is not.
-// isatest found this by disagreeing with qemu on CVTPS2DQ in the wasm build and
-// agreeing in the native one.
-int32_t to_int32_x86(double v) {
-    // The comparison is written so a NaN fails it: NaN is not >= anything.
-    if (!(v >= -2147483648.0 && v <= 2147483647.0)) return INT32_MIN;
-    return static_cast<int32_t>(v);
-}
-
-int64_t to_int64_x86(double v) {
-    // 2^63 is exactly representable; 2^63 - 1 is not, so the upper bound is
-    // strict against 2^63 rather than inclusive of INT64_MAX.
-    if (!(v >= -9223372036854775808.0 && v < 9223372036854775808.0)) return INT64_MIN;
-    return static_cast<int64_t>(v);
-}
-
 double round_by_mxcsr(uint32_t mxcsr, double v) {
     switch ((mxcsr >> 13) & 3) {
         case 1: return std::floor(v);
