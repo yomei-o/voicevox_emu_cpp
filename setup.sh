@@ -23,8 +23,22 @@ echo "=== 2/3  emulator"
 if [ -x x86_emu_cpp/build/Release/x86emu.exe ] || [ -x x86_emu_cpp/x86emu.exe ] ||
    [ -x x86_emu_cpp/x86emu ]; then
     echo "    already built"
-else
+elif command -v "${CXX:-g++}" >/dev/null 2>&1; then
     (cd x86_emu_cpp && sh build.sh)
+else
+    # No g++, which on Windows is the ordinary case: build with MSVC through
+    # CMake instead.  vcvars is deliberately not used - on the machine this was
+    # written on it hangs forever when invoked from a shell - and CMake's
+    # Visual Studio generator does not need it.
+    CMAKE=${CMAKE:-cmake}
+    command -v "$CMAKE" >/dev/null 2>&1 || CMAKE="C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe"
+    [ -x "$CMAKE" ] || command -v "$CMAKE" >/dev/null 2>&1 || {
+        echo "    no g++ and no cmake: install one, or set CXX= / CMAKE="
+        exit 1
+    }
+    echo "    no g++; building with cmake and MSVC"
+    (cd x86_emu_cpp && "$CMAKE" -B build -G "Visual Studio 17 2022" -A x64 > /dev/null &&
+        "$CMAKE" --build build --config Release --parallel)
 fi
 
 echo "=== 3/3  guests"
