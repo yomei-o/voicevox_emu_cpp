@@ -9,6 +9,7 @@
 // execute_0f() can carry on with the integer forms.
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -143,6 +144,29 @@ Cpu::Xmm aes_inv_mix_columns(const Cpu::Xmm& s) {
 
 // MXCSR carries the same rounding-mode field as the x87 control word, in bits
 // 13-14.
+// Converting a float to an integer the way x86 does: round it, and answer with
+// the "integer indefinite" value - the destination's INT_MIN - when the result
+// will not fit or the source is a NaN.
+//
+// Writing that as a plain C++ cast is undefined behaviour, and undefined
+// behaviour is not portable.  Compiled for x86 the cast becomes the very
+// instruction being emulated and looks perfectly correct; compiled to
+// WebAssembly it becomes a trapping or saturating truncate and quietly is not.
+// isatest found this by disagreeing with qemu on CVTPS2DQ in the wasm build and
+// agreeing in the native one.
+int32_t to_int32_x86(double v) {
+    // The comparison is written so a NaN fails it: NaN is not >= anything.
+    if (!(v >= -2147483648.0 && v <= 2147483647.0)) return INT32_MIN;
+    return static_cast<int32_t>(v);
+}
+
+int64_t to_int64_x86(double v) {
+    // 2^63 is exactly representable; 2^63 - 1 is not, so the upper bound is
+    // strict against 2^63 rather than inclusive of INT64_MAX.
+    if (!(v >= -9223372036854775808.0 && v < 9223372036854775808.0)) return INT64_MIN;
+    return static_cast<int64_t>(v);
+}
+
 double round_by_mxcsr(uint32_t mxcsr, double v) {
     switch ((mxcsr >> 13) & 3) {
         case 1: return std::floor(v);
@@ -391,10 +415,9 @@ bool Cpu::execute_sse(uint8_t op) {
             // 0x2C truncates; 0x2D rounds to nearest (the default MXCSR mode).
             double r = op == 0x2C ? std::trunc(v) : round_by_mxcsr(mxcsr, v);
             if (opsize_ == 8)
-                reg_write(modrm_reg_, 8, static_cast<uint64_t>(static_cast<int64_t>(r)));
+                reg_write(modrm_reg_, 8, static_cast<uint64_t>(to_int64_x86(r)));
             else
-                reg_write(modrm_reg_, 4,
-                          static_cast<uint32_t>(static_cast<int32_t>(r)));
+                reg_write(modrm_reg_, 4, static_cast<uint32_t>(to_int32_x86(r)));
             return true;
         }
         case 0x5A: {  // CVTSS2SD / CVTSD2SS / CVTPS2PD / CVTPD2PS
@@ -425,7 +448,7 @@ bool Cpu::execute_sse(uint8_t op) {
             } else {
                 for (int i = 0; i < 4; ++i) {
                     float f = s.f32[i];
-                    r.d[i] = static_cast<uint32_t>(static_cast<int32_t>(
+                    r.d[i] = static_cast<uint32_t>(to_int32_x86(
                         sel == Sel::PF3 ? std::trunc(f) : round_by_mxcsr(mxcsr, f)));
                 }
             }
@@ -440,7 +463,7 @@ bool Cpu::execute_sse(uint8_t op) {
                 r.f64[1] = static_cast<int32_t>(s.d[1]);
             } else {
                 for (int i = 0; i < 2; ++i)
-                    r.d[i] = static_cast<uint32_t>(static_cast<int32_t>(
+                    r.d[i] = static_cast<uint32_t>(to_int32_x86(
                         sel == Sel::P66 ? std::trunc(s.f64[i]) : round_by_mxcsr(mxcsr, s.f64[i])));
             }
             xmm[modrm_reg_] = r;

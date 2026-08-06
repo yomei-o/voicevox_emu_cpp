@@ -5,6 +5,7 @@
 // covered here - and a failure prints a stack trace instead of vanishing into
 // a worker.
 //
+//   node web/test_node.mjs isatest          # is the wasm build's ISA right
 //   node web/test_node.mjs probe            # does the runtime come up
 //   node web/test_node.mjs analyze こんにちは  # text analysis, seconds
 //   node web/test_node.mjs tts あ            # the whole thing, and slow
@@ -80,7 +81,9 @@ const args =
            '/opt/vv/open_jtalk_dic_utf_8-1.11', '/opt/vv/0.vvm', text, style, '/opt/vv/out.wav']
         : what === 'analyze'
             ? ['/opt/vv/analyze', '/opt/vv/open_jtalk_dic_utf_8-1.11', text]
-            : ['/opt/vv/probe', '/opt/vv/libvoicevox_onnxruntime.so.1.17.3'];
+            : what === 'isatest'
+                ? ['/opt/vv/isatest']
+                : ['/opt/vv/probe', '/opt/vv/libvoicevox_onnxruntime.so.1.17.3'];
 
 const enc = new TextEncoder();
 const parts = args.map((a) => enc.encode(a));
