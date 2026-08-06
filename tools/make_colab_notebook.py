@@ -154,8 +154,11 @@ for f in ['src/cudaprobe.c', 'src/cudavvm.c', 'src/onnxruntime_c_api.h']:
     subprocess.run(['curl', '-sfL', '-o', os.path.basename(f), f'{REPO}/{f}'], check=True)
 subprocess.run(['curl', '-sfL', '-o', 'predict_duration.onnx',
                 f'{REPO}/guest/predict_duration.onnx'], check=True)
+# No -rpath: IPython substitutes $NAME in a ! line from the Python namespace,
+# so '$ORIGIN' would arrive at the linker empty.  LD_LIBRARY_PATH covers it.
 !gcc -O2 -Wall -I. -o cudaprobe cudaprobe.c -ldl
-!gcc -O2 -Wall -I. -o cudavvm cudavvm.c -L. -lvoicevox_core -Wl,-rpath,'$ORIGIN'
+!gcc -O2 -Wall -I. -o cudavvm cudavvm.c -L. -lvoicevox_core
+assert os.path.exists('cudaprobe') and os.path.exists('cudavvm'), 'compile failed'
 !ls -la cudaprobe cudavvm
 """),
 
@@ -228,9 +231,22 @@ int main(int argc, char** argv) {
 }
 '''
 open('gpusay.c', 'w').write(say_c)
-!gcc -O2 -Wall -I. -o gpusay gpusay.c -L. -lvoicevox_core -Wl,-rpath,'$ORIGIN'
-!LD_LIBRARY_PATH=$LD_LIBRARY_PATH ./gpusay ./libvoicevox_onnxruntime.so.{VV_ORT} ./open_jtalk_dic_utf_8-1.11 ./{VVM} 'あ' 3 gpu_a.wav 2>&1 | tail -3
-!LD_LIBRARY_PATH=$LD_LIBRARY_PATH ./gpusay ./libvoicevox_onnxruntime.so.{VV_ORT} ./open_jtalk_dic_utf_8-1.11 ./{VVM} 'ずんだもんなのだ' 3 gpu_zundamon.wav 2>&1 | tail -3
+!gcc -O2 -Wall -I. -o gpusay gpusay.c -L. -lvoicevox_core
+assert os.path.exists('gpusay'), 'gpusay did not compile'
+
+# Nothing is piped away here: when this fails it is the only place that says
+# why, and hiding it behind `tail` is how a missing WAV becomes a mystery two
+# cells later.
+for text, out in [('あ', 'gpu_a.wav'), ('ずんだもんなのだ', 'gpu_zundamon.wav')]:
+    print('====', out)
+    r = subprocess.run(['./gpusay', f'./libvoicevox_onnxruntime.so.{VV_ORT}',
+                        './open_jtalk_dic_utf_8-1.11', f'./{VVM}', text, '3', out],
+                       capture_output=True, text=True, env=dict(os.environ))
+    print(r.stdout[-2000:])
+    if r.stderr.strip():
+        print('--- stderr ---')
+        print(r.stderr[-2000:])
+    print('exit', r.returncode, '| file exists:', os.path.exists(out))
 """),
 
 code("""
