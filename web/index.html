@@ -90,6 +90,21 @@ VOICEVOX の音声モデルは暗号化されていて、パッチの当たっ�
 </div>
 </div>
 
+<h2>先に、出てきた音</h2>
+<div class="card">
+  <p class="note" style="margin-bottom:.7rem">
+    下の「合成する」を押せば同じものがこのタブの中で作られますが、
+    <b>数時間かかります</b>。これはその手順をこのマシンで最後まで走らせて出てきた
+    WAV です —— 手を加えていない、エミュレータの出力そのものです。
+  </p>
+  <audio controls src="sample/emu_a.wav" style="width:100%; max-width:22rem"></audio>
+  <p class="note" style="margin:.6rem 0 0">
+    「あ」（0.52 秒）。モデルの復号に 498 秒、推論に 2498 秒。
+    同じテキストをネイティブで合成したものとの差は、サンプルの最大で 3
+    （ピーク 3912 に対して 0.077%）。
+  </p>
+</div>
+
 <h2><span class="step">1</span>テキスト解析を試す</h2>
 <div class="card">
   <p class="note" style="margin-bottom:.6rem">
