@@ -38,24 +38,29 @@
 </p>
 
 <fieldset>
-  <legend>まず、CUDA ビルドの3ファイルを選んでください</legend>
+  <legend>CUDA ビルドの ONNX Runtime</legend>
   <p style="margin:.25rem 0 .75rem">
-    このリポジトリは CPU 版しか持っていないので、CUDA 版は手元のものを使います。
-    ページの外には出ません。<br>
-    <a href="https://github.com/VOICEVOX/onnxruntime-builder/releases">voicevox_onnxruntime の CUDA 版</a>
-    を展開した <code>lib/</code> から、次の3つを選びます:
+    このページが使う3ファイルはリポジトリに入っているので、<strong>何も選ばずに始められます</strong>。
+    合わせて 15 MB を取ってきます。
   </p>
-  <table>
-    <tr><td>libvoicevox_onnxruntime.so.1.17.3</td><td>18 MB</td></tr>
-    <tr><td>libvoicevox_onnxruntime_providers_shared.so</td><td>14 KB</td></tr>
-    <tr><td>libvoicevox_onnxruntime_providers_cuda.so</td><td>440 MB</td></tr>
-  </table>
-  <p class="warn" style="margin:.75rem 0 0; font-size:.85rem">
-    440 MB のうち 419 MB は GPU の機械語で、ここでは一度も実行されません。
-    <code>tools/slim_provider.sh</code> を通したものなら、中身がゼロになるだけで同じように動きます。
+  <p class="warn" style="margin:0 0 .75rem; font-size:.85rem">
+    <code>providers_cuda.so</code> は 440 MB のうち 419 MB が GPU の機械語で、
+    ここでは一度も実行されません。入っているのは
+    <code>tools/slim_provider.sh</code> でその部分をゼロにしたもので、
+    動きは変わらず 8.8 MB に縮みます。
   </p>
-  <label for="libs">3ファイルを選択（まとめて選べます）</label>
-  <input type="file" id="libs" multiple>
+  <details>
+    <summary style="cursor:pointer;color:#888;font-size:.9rem">
+      手元の別のものを使う（省略可）
+    </summary>
+    <p style="margin:.75rem 0 0; font-size:.9rem">
+      <a href="https://github.com/VOICEVOX/onnxruntime-builder/releases">voicevox_onnxruntime</a>
+      の CUDA 版を展開した <code>lib/</code> から選べば、そちらが優先されます。
+      ページの外には出ません。
+    </p>
+    <label for="libs">ファイルを選択（まとめて選べます）</label>
+    <input type="file" id="libs" multiple>
+  </details>
 </fieldset>
 
 <fieldset>
@@ -189,18 +194,12 @@ function ensureWorker() {
     return worker;
 }
 
-function libs() {
-    const files = [...$('libs').files];
-    if (files.length === 0) {
-        $('status').textContent = '先に CUDA ビルドの3ファイルを選んでください。';
-        return null;
-    }
-    return files;
-}
+// Whatever was picked, which may be nothing: the runtime is in the repository
+// now and a selection only overrides it.
+function libs() { return [...$('libs').files]; }
 
 $('build').addEventListener('click', () => {
     const files = libs();
-    if (!files) return;
     busy(true);
     $('result').textContent = '';
     ensureWorker().postMessage({ type: 'build', files });
@@ -208,7 +207,6 @@ $('build').addEventListener('click', () => {
 
 $('go').addEventListener('click', async () => {
     const files = libs();
-    if (!files) return;
     const chosen = [...$('state').files];
     const session = chosen.find((f) => !/\.shim$/.test(f.name));
     const shim = chosen.find((f) => /\.shim$/.test(f.name));
@@ -233,7 +231,6 @@ $('again').addEventListener('click', () => {
 
 $('once').addEventListener('click', () => {
     const files = libs();
-    if (!files) return;
     busy(true);
     $('result').textContent = '';
     ensureWorker().postMessage({ type: 'speak', text: $('text').value, files });

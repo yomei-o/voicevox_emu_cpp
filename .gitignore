@@ -46,6 +46,11 @@ guest/cudaguest/
 guest/cudaprobe
 guest/cudavvm
 cuda/
+# ...except the runtime the demo page needs, which is carried on purpose: 15 MB
+# gzipped, with the provider's GPU code zeroed by tools/slim_provider.sh.
+# Without it the page cannot start until someone has fetched a 440 MB release.
+!guest/cuda/
+!guest/cuda/*.gz
 build/api/eigentest*
 
 # The CUDA stand-ins get copied where a Debian with CUDA installed would keep

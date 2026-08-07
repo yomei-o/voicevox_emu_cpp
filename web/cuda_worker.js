@@ -111,9 +111,21 @@ const FILES = [
     ['/lib/x86_64-linux-gnu/libcufft.so.11', 'guest/cudaguest/libcufft.so.11'],
 ];
 
-// What the page has to be given, because this repository does not carry it.
-// The names are matched loosely: a file picker hands back whatever the user
-// selected, and the three are told apart by what is in them.
+// The CUDA runtime, gzipped, because the slimmed provider is still 439 MB on
+// disk and 8.8 MB compressed.  Fetched like everything else; the file picker is
+// now an override rather than a requirement.
+const CUDA_FILES = [
+    ['/opt/vvcuda/libvoicevox_onnxruntime.so.1.17.3',
+     '../guest/cuda/libvoicevox_onnxruntime.so.1.17.3.gz'],
+    ['/opt/vvcuda/libvoicevox_onnxruntime_providers_shared.so',
+     '../guest/cuda/libvoicevox_onnxruntime_providers_shared.so.gz'],
+    ['/opt/vvcuda/libvoicevox_onnxruntime_providers_cuda.so',
+     '../guest/cuda/libvoicevox_onnxruntime_providers_cuda.so.gz'],
+];
+
+// A file the page was handed instead.  The names are matched loosely: a file
+// picker gives back whatever was selected, and the three are told apart by what
+// is in them.
 function classify(name) {
     if (/providers_cuda/.test(name)) return '/opt/vvcuda/libvoicevox_onnxruntime_providers_cuda.so';
     if (/providers_shared/.test(name)) return '/opt/vvcuda/libvoicevox_onnxruntime_providers_shared.so';
@@ -125,9 +137,9 @@ async function prepare(supplied) {
     await startModule();
     if (ready) return;
 
-    const need = new Set(['/opt/vvcuda/libvoicevox_onnxruntime.so.1.17.3',
-                          '/opt/vvcuda/libvoicevox_onnxruntime_providers_shared.so',
-                          '/opt/vvcuda/libvoicevox_onnxruntime_providers_cuda.so']);
+    // Anything the page was handed wins over what the repository carries: a
+    // newer runtime, or the real provider instead of the slimmed one.
+    const given = new Set();
     for (const file of supplied) {
         const where = classify(file.name);
         if (!where) {
@@ -136,14 +148,17 @@ async function prepare(supplied) {
         }
         status('読み込み: ' + file.name);
         writeInto(where, new Uint8Array(await file.arrayBuffer()));
-        need.delete(where);
-    }
-    if (need.size) {
-        throw new Error('足りません: ' + [...need].map((p) => p.split('/').pop()).join(', '));
+        given.add(where);
     }
 
     let done = 0;
-    const total = FILES.length + 1;
+    const total = FILES.length + CUDA_FILES.length + 1;
+    for (const [guest, url] of CUDA_FILES) {
+        if (given.has(guest)) { done++; continue; }
+        status(`ダウンロード (${++done}/${total}): ${guest.split('/').pop()}`);
+        post({ type: 'progress', done, total });
+        writeInto(guest, await gunzip(await fetchBytes(url)));
+    }
     for (const [guest, url, mode] of FILES) {
         status(`ダウンロード (${++done}/${total}): ${guest}`);
         post({ type: 'progress', done, total });

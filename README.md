@@ -28,8 +28,10 @@ second. The synthesis button is there too, and honest about costing hours.
 <https://yomei-o.github.io/voicevox_emu_cpp/web/cuda.html> — where synthesis
 takes **twenty-two seconds** instead. It runs the *CUDA* build of the runtime
 and answers its kernels with compiled WebAssembly rather than interpreting
-them. It needs the CUDA libraries, which this repository does not carry, so the
-page asks for them from disk - nothing leaves the tab.
+them. Nothing has to be supplied: the CUDA runtime is carried here, gzipped, at
+15 MB - the provider is 439 MB of which 419 MB is GPU machine code that this
+path never executes, so `tools/slim_provider.sh` zeroes it and gzip does the
+rest. A file picker is still there for a different copy.
 
 Building the sessions takes about thirteen minutes, and that page will now
 **save one** when it is done. Load the two files it gives you and the thirteen
@@ -123,11 +125,15 @@ clang cross-compile, and `qemu-x86_64` there makes an excellent reference.)
 
 ## Synthesis in seconds
 
-Needs the CUDA build of `voicevox_onnxruntime` (which this repository does not
-carry) and a Linux host or WSL. See [CUDA_SHIM.md](CUDA_SHIM.md) for what it is
-and what it measures.
+Needs a Linux host or WSL. The CUDA build of `voicevox_onnxruntime` is carried
+in `guest/cuda/`, gzipped and with the provider slimmed - the browser demo uses
+it as it is, and `node web/test_carried.mjs` holds that copy to the sixteen
+reference values. The native path below still expects an unpacked release,
+because it also wants the real thing available for comparison. See
+[CUDA_SHIM.md](CUDA_SHIM.md) for what the shim is and what it measures.
 
-    sh tools/slim_provider.sh <providers_cuda.so>   # 440 MB -> 9.3 MB gzipped
+    sh tools/slim_provider.sh <providers_cuda.so>   # 440 MB -> 8.8 MB gzipped
+    sh tools/wslpackcuda.sh                         # and into guest/cuda/
     MODE=guest sh tools/make_cuda_stubs.sh <lib dir>
     sh build_cudaemu.sh                             # the emulator + the shim
     sh tools/wslrun_cuda.sh                         # and a WAV, in seconds

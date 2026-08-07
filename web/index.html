@@ -173,6 +173,11 @@ VOICEVOX の音声モデルは暗号化されていて、パッチの当たっ�
   <div class="row">
     <button id="go-speak" disabled>合成する（数時間かかります）</button>
   </div>
+  <p class="note" style="margin:.5rem 0 0">
+    待てない場合は <a href="cuda.html">CUDA 版のページ</a> があります。同じ音声を
+    <b>25 秒</b>で作ります —— カーネルをエミュレータの外側で計算するためです。
+    セッションを一度作って保存しておけば、そのあとは何度でも別の言葉を喋らせられます。
+  </p>
   <div class="status" id="status-run"></div>
   <div id="player" style="margin-top:.75rem"></div>
 </div>

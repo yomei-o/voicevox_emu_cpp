@@ -10,7 +10,15 @@
 set -e
 cd "$(dirname "$0")/.."
 EMCC=${EMCC:-emcc}
-command -v "$EMCC" >/dev/null 2>&1 || { echo "emcc not found; set EMCC=/path/to/emcc"; exit 1; }
+command -v "$EMCC" >/dev/null 2>&1 || [ -x "$EMCC" ] ||
+    { echo "emcc not found; set EMCC=/path/to/emcc"; exit 1; }
+
+# The link has to be a C++ one, the same way web/build_cuda.sh does it: emcc
+# decides from its inputs and gets it wrong here, and every `throw` in the
+# emulator then comes back as an undefined symbol.  The driver is em++, not
+# emcc++ - `${EMCC}++` looks right and names a file that does not exist.
+EMXX=${EMXX:-$(dirname "$EMCC")/em++}
+[ -x "$EMXX" ] || command -v "$EMXX" >/dev/null 2>&1 || EMXX="$EMCC -sDEFAULT_TO_CXX"
 
 echo "== building web/x86emu.js"
 # Everything in the emulator's src/ except the command line front end, which
@@ -19,7 +27,7 @@ SOURCES=$(ls x86_emu_cpp/src/*.cpp | grep -v '/main\.cpp$')
 
 # A 58 MB model, a 100 MB dictionary and an 18 MB runtime all live in the guest
 # at once, so the heap has to be allowed to grow well past the default.
-"$EMCC" -std=c++17 -O3 -Ix86_emu_cpp/src \
+$EMXX -std=c++17 -O3 -Ix86_emu_cpp/src \
     $SOURCES web/wasm_api.cpp \
     -o web/x86emu.js \
     -sMODULARIZE=1 \
