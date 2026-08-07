@@ -321,11 +321,26 @@ again. So: **minutes, dominated by session building, with the synthesis itself
 no longer the problem.** That is a different demo from the one that costs
 hours, and a different remaining job — one about graph construction, not CUDA.
 
-**Does it fit in a tab?** Still the open one. `Memory::map` allocates every page
-of a segment up front and the loader writes the whole segment, so the provider's
-419 MB of zeros still cost 419 MB of guest pages. Lazy pages — record the range,
-allocate on first touch — would fix it, and would help every other large mapping
-too. On a desktop it simply works; a tab is where it would not.
+**Does it fit in a tab? Closer, and still not the whole story.** Pages are
+reserved rather than allocated now, a whole page of zeros written over a page
+that has never been touched is skipped, and a file mapping is read a megabyte at
+a time instead of into one buffer the size of the segment. Same run, measured
+both ways:
+
+| peak resident, one utterance | |
+| --- | --- |
+| before | 1058 MB |
+| after | **538 MB** |
+
+Both finished and both produced the same audio. What is left is real memory: the
+weights, the activations, the guest's own heap.
+
+The part that is *not* solved is getting the file there. On a desktop the
+emulator reads the provider off the filesystem; in a browser it would have to
+live in MEMFS first, and a 460 MB file in MEMFS is 460 MB of heap no matter how
+few of its pages the guest touches. Shipping it as 9.3 MB solves the download
+and not that. Some sparse form the emulator's file layer understands would —
+which is new work, and honestly stated, not started.
 
 And one more thing to weigh against it: the shim is competitive per core but it
 is single-threaded, where MLAS is not. Same utterance, this machine, eight
