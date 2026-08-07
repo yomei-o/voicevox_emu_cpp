@@ -1,6 +1,7 @@
 // Load a VOICEVOX .vvm through voicevox_onnxruntime, without voicevox_core.
 //
-//   vvmload <libvoicevox_onnxruntime.so.N> <model.vvm> [which]
+//   vvmload <voicevox_onnxruntime library> <model.vvm> [which]
+//     the library is libvoicevox_onnxruntime.so.N, or the .dll on Windows
 //     which: predict_duration (the default) | predict_intonation | decode
 //
 // What this shows is that the encrypted model format needs nothing from the
@@ -17,11 +18,17 @@
 // how the payload is encrypted - which is the point: this is the published
 // interface being used as published.
 //
-// Build (Linux):
-//   g++ -std=c++17 -Isrc -o vvmload src/vvmload.cpp -ldl
+// Build:
+//   Linux    g++ -std=c++17 -Isrc -o vvmload src/vvmload.cpp -ldl
+//   Windows  sh build_vvmload.sh      (calls cl.exe directly; vcvars is not used)
 //
 // The header is ONNX Runtime's own onnxruntime_c_api.h.
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 #include <cstdint>
 #include <cstdio>
@@ -34,6 +41,56 @@
 namespace {
 
 const OrtApi* g_api = nullptr;
+
+// ---------------------------------------------------------------------------
+// Opening the runtime at run time
+//
+// Not linked, because which build is in use is a run-time choice - the CPU one
+// and the CUDA one export the same three symbols - and because the file is
+// named differently on each platform.  Two calls, so two spellings.
+
+void* open_library(const char* path) {
+#if defined(_WIN32)
+    return reinterpret_cast<void*>(LoadLibraryA(path));
+#else
+    return dlopen(path, RTLD_NOW | RTLD_LOCAL);
+#endif
+}
+
+void* library_symbol(void* lib, const char* name) {
+#if defined(_WIN32)
+    return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(lib), name));
+#else
+    return dlsym(lib, name);
+#endif
+}
+
+// Why it would not open, in whatever terms the platform uses.
+std::string library_error() {
+#if defined(_WIN32)
+    // The number always, then the text.  FormatMessageA answers in the system's
+    // ANSI code page, which is right for a console on the machine it came from
+    // and unreadable anywhere the bytes are relayed - so the number goes first,
+    // because 126 means the same thing everywhere.
+    DWORD err = GetLastError();
+    std::string out = "error " + std::to_string(err);
+    char* text = nullptr;
+    FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                       FORMAT_MESSAGE_IGNORE_INSERTS,
+                   nullptr, err, 0, reinterpret_cast<char*>(&text), 0, nullptr);
+    if (text) {
+        std::string message = text;
+        LocalFree(text);
+        while (!message.empty() && (message.back() == '\n' || message.back() == '\r'))
+            message.pop_back();
+        if (!message.empty()) out += ": " + message;
+    }
+    return out;
+#else
+    const char* e = dlerror();
+    return e ? e : "unknown";
+#endif
+}
 
 // The informational calls return a status too.  None of them can fail on a
 // session that was already built, but a status is an allocation, so they are
@@ -202,7 +259,7 @@ void describe(OrtSession* session, OrtAllocator* alloc) {
 int main(int argc, char** argv) {
     if (argc < 3) {
         std::fprintf(stderr,
-                     "usage: vvmload <libvoicevox_onnxruntime.so.N> <model.vvm> "
+                     "usage: vvmload <voicevox_onnxruntime library> <model.vvm> "
                      "[predict_duration|predict_intonation|decode]\n");
         return 2;
     }
@@ -213,13 +270,14 @@ int main(int argc, char** argv) {
     // ---- the runtime -------------------------------------------------------
     // dlopen rather than linking, because there is more than one build of it -
     // CPU and CUDA - and which one is in use is a run-time choice.
-    std::printf("step  dlopen %s\n", runtime.c_str());
-    void* lib = dlopen(runtime.c_str(), RTLD_NOW | RTLD_LOCAL);
+    std::printf("step  load %s\n", runtime.c_str());
+    void* lib = open_library(runtime.c_str());
     if (!lib) {
-        std::fprintf(stderr, "FAIL  dlopen: %s\n", dlerror());
+        std::fprintf(stderr, "FAIL  cannot load: %s\n", library_error().c_str());
         return 1;
     }
-    auto get_base = reinterpret_cast<const OrtApiBase* (*)()>(dlsym(lib, "OrtGetApiBase"));
+    auto get_base =
+        reinterpret_cast<const OrtApiBase* (*)()>(library_symbol(lib, "OrtGetApiBase"));
     if (!get_base) {
         std::fprintf(stderr, "FAIL  no OrtGetApiBase - is this voicevox_onnxruntime?\n");
         return 1;
