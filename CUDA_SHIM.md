@@ -318,6 +318,59 @@ So the shape of the problem has inverted, and the remaining job is the one this
 project already named: **a JIT**, or caching a built session. Nothing to do with
 CUDA, and nothing a hook can reach.
 
+## Starting from a built session
+
+Synthesis is seconds and building the sessions is minutes, so the obvious thing
+to want is to do the first once and resume from it. `VVSNAPSHOT=<path>` writes
+the state at exactly that point - after `load_voice_model`, before a single
+kernel has launched. Restoring is the other half and is not written yet.
+
+The question was whether such a thing could be small enough to be worth having.
+It can:
+
+| | raw | gzip -9 | xz -9e |
+| --- | --- | --- | --- |
+| everything live | 314.5 MB | 154.7 MB | 127.4 MB |
+| **without the pages that still match their file** | 147.5 MB | 113.9 MB | **78.6 MB** |
+
+The second row is the whole trick, and the breakdown by mapping is what found
+it:
+
+    98.3 MB  mmap sys.dic          <- the Open JTalk dictionary
+    77.2 MB  (anonymous)
+    39.1 MB  mmap providers_cuda.so
+    17.4 MB  mmap libvoicevox_onnxruntime.so.1.17.3
+    12.4 MB  the other libraries and dictionary files
+
+Two thirds of it is file content that a resume can simply read back - the
+dictionary alone is 98.3 MB and is mapped read-only. So the snapshot compares
+each page against the file it came from and leaves out the ones that still
+match: 42660 pages of 62746, **166.6 MB left behind**. Comparing rather than
+keeping a dirty bit is exact, and costs nothing when nobody is snapshotting.
+
+What was tried and did not work is worth as much:
+
+- **Deduplication.** 62071 of 62714 pages were already distinct.
+- **De-interleaving the bytes of the float weights.** The standard trick for
+  arrays of floats, and it does help each half on its own - the arena goes
+  51.0 MB to 46.2, and once the file-backed pages are gone the guest half goes
+  50.1 to 45.9. But compressed *as one stream*, which is how it would actually
+  ship, it makes things **worse**: 78.5 MB becomes 83.5. Shuffling breaks up
+  structure that xz was exploiting across the whole file. Picking the best
+  transform for each half and adding them up gives 92.1 MB, which is worse
+  again than doing nothing to either.
+
+So: **78.6 MB**, by leaving things out rather than by squeezing them.
+
+For scale, the demo page already downloads 109 MB. A snapshot would replace most
+of that rather than add to it - and it is the only thing measured so far that
+would take the browser from twenty minutes to seconds, because the twenty
+minutes is session building and this skips it entirely.
+
+**And it contains the decrypted voice model**, in guest memory and again in the
+arena. On your own disk that is your own process's state. Shipping one is a
+different question, and not a technical one.
+
 ## Could this make the browser demo bearable?
 
 The question the whole exercise is for. All four of the things it turns on are

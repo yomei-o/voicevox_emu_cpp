@@ -77,7 +77,17 @@ def main():
     print()
     best_guest = min(x for x in (a, d) if x)
     best_arena = min(x for x in (b, c) if x)
-    print("  best of each, together: %.1f MB" % ((best_guest + best_arena) / 1048576))
+    print("  the two compressed apart:   %.1f MB"
+          % ((best_guest + best_arena) / 1048576))
+
+    # Apart is not the same as together: one stream lets the compressor share a
+    # dictionary across both halves, and on this data that is worth more than
+    # picking the best transform for each.  So the number to quote is this one.
+    whole = squeeze("both, de-interleaved, one stream",
+                    shuffle4(bodies) + shuffle4(arena))
+    plain = squeeze("both, as they are, one stream", bodies + arena)
+    print()
+    print("  best overall: %.1f MB" % (min(whole, plain) / 1048576))
 
 
 main()
