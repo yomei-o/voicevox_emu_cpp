@@ -36,6 +36,9 @@ static void js_guest_log(const char*) {}
 // so the demo page is unaffected.
 #ifdef VVCUDA_SHIM
 int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t args);
+// The shim's own saved bookkeeping - the device arena's free list and the cuDNN
+// descriptor table.  Only this build has an arena to restore.
+bool vv_restore_shim(x86emu::Emulator& e, const std::string& path);
 #endif
 
 namespace {
@@ -110,6 +113,9 @@ std::vector<std::string> split_argv(const char* data, int len) {
 
 extern "C" {
 
+int emu_resume_path(const char* path, const char* argv_data, int argv_len,
+                    int trace_calls, double max_insns, const char* state);
+
 // Runs an image and returns its exit code, or -1 if it could not run (in which
 // case emu_error() explains why).
 int emu_run(const uint8_t* data, int len, int trace_calls, double max_insns) {
@@ -137,6 +143,22 @@ int emu_run(const uint8_t* data, int len, int trace_calls, double max_insns) {
 // included). Returns the exit code, or -1 with emu_error() set.
 int emu_run_path(const char* path, const char* argv_data, int argv_len,
                  int trace_calls, double max_insns) {
+    return emu_resume_path(path, argv_data, argv_len, trace_calls, max_insns, nullptr);
+}
+
+// The same, carrying on from a saved state instead of starting the program.
+//
+// The program is still loaded first: that is what rebuilds the hook table, the
+// module list and the shim's own boundary, none of which is in the file.  Then
+// the guest's state goes over the top, and last the shim asks where on *this*
+// host its arena landed - which is a different address from the one that saved
+// it, and has to be, since none of them were written into the guest.
+//
+// That is what makes a state written by the native build resume here, where a
+// pointer is four bytes rather than eight.  Nothing in the file is a host
+// address or depends on the host's word size.
+int emu_resume_path(const char* path, const char* argv_data, int argv_len,
+                    int trace_calls, double max_insns, const char* state) {
     g_error.clear();
     g_instructions = 0;
     g_format.clear();
@@ -152,6 +174,18 @@ int emu_run_path(const char* path, const char* argv_data, int argv_len,
     } catch (const std::exception& err) {
         g_error = err.what();
         return -1;
+    }
+    if (state && *state) {
+        if (!emu.load_state(state)) {
+            g_error = std::string("cannot resume from ") + state;
+            return -1;
+        }
+#ifdef VVCUDA_SHIM
+        if (!vv_restore_shim(emu, std::string(state) + ".shim")) {
+            g_error = std::string("cannot resume from ") + state + ".shim";
+            return -1;
+        }
+#endif
     }
     return run_loaded(emu);
 }
