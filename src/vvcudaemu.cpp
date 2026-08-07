@@ -22,6 +22,9 @@
 #include "emulator.h"
 
 int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t args);
+// The shim's own saved bookkeeping - the device arena's free list and the cuDNN
+// descriptor table.  Implemented in cudahost.cpp, where those live.
+bool vv_restore_shim(x86emu::Emulator& e, const std::string& path);
 extern "C" int vvstub_timing;
 
 int main(int argc, char** argv) {
@@ -33,6 +36,10 @@ int main(int argc, char** argv) {
     // to read has to be said here.  That default cost this project two wrong
     // explanations before it was noticed.
     std::vector<std::string> guest_env;
+    // A state to carry on from instead of starting the program.  The program is
+    // still loaded first: that is what rebuilds the hook table, the module list
+    // and the shim's own boundary, none of which is in the file.
+    std::string resume;
 
     int i = 1;
     for (; i < argc; ++i) {
@@ -45,9 +52,11 @@ int main(int argc, char** argv) {
             opt.dump_map = true;
         } else if (arg == "--env" && i + 1 < argc) {
             guest_env.push_back(argv[++i]);
+        } else if (arg == "--resume" && i + 1 < argc) {
+            resume = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
             std::printf("vvcudaemu [--sysroot DIR] [--env NAME=VALUE] [-c] [-m]"
-                        " <program> [args...]\n");
+                        " [--resume FILE] <program> [args...]\n");
             return 0;
         } else if (!arg.empty() && arg[0] == '-' && arg != "-") {
             std::fprintf(stderr, "vvcudaemu: unknown option %s\n", arg.c_str());
@@ -90,6 +99,22 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "vvcudaemu: cannot load %s: %s\n", program.c_str(),
                      err.what());
         return 1;
+    }
+
+    // The guest's state goes back first.  The device arena is part of it - a
+    // region like any other, marked contiguous - so restoring the address space
+    // is what brings the arena back, and only then can the shim find out where
+    // on this host it landed.
+    if (!resume.empty()) {
+        if (!emu.load_state(resume)) {
+            std::fprintf(stderr, "vvcudaemu: cannot resume from %s\n", resume.c_str());
+            return 1;
+        }
+        if (!vv_restore_shim(emu, resume + ".shim")) {
+            std::fprintf(stderr, "vvcudaemu: cannot resume from %s.shim\n",
+                         resume.c_str());
+            return 1;
+        }
     }
 
     try {

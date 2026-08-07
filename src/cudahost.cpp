@@ -205,18 +205,25 @@ void device_free(uint64_t p) {
 // a saved session is exactly that.  So handles are small integers now, and the
 // host keeps the table.
 
-std::map<uint64_t, void*> descriptors;
+// The kind travels with the pointer because a saved session has to build these
+// again on the other side, and `void*` does not say what to build.
+struct Descriptor {
+    int kind = 0;
+    void* p = nullptr;
+};
+
+std::map<uint64_t, Descriptor> descriptors;
 uint64_t next_handle = 1;
 
-uint64_t remember_descriptor(void* d) {
+uint64_t remember_descriptor(int kind, void* d) {
     if (!d) return 0;
-    descriptors[next_handle] = d;
+    descriptors[next_handle] = Descriptor{kind, d};
     return next_handle++;
 }
 
 void* descriptor(uint64_t handle) {
     auto it = descriptors.find(handle);
-    return it == descriptors.end() ? nullptr : it->second;
+    return it == descriptors.end() ? nullptr : it->second.p;
 }
 
 void forget_descriptor(uint64_t handle) { descriptors.erase(handle); }
@@ -417,13 +424,123 @@ uint64_t fnv1a(const uint8_t* p, size_t n) {
     return h;
 }
 
-int64_t write_snapshot(x86emu::Emulator& e, const std::string& path) {
-    constexpr uint64_t kPage = x86emu::Memory::kPageSize;
+// What the shim itself is holding, beside the guest's own state.
+//
+// The arena's *contents* are guest memory and go with everything else; what does
+// not is the bookkeeping - how far the arena has been handed out, which blocks
+// came back - and the descriptor table, which is host objects the guest knows
+// only by number.  Both are small, and both are integers: the three descriptor
+// structs are int arrays and nothing else, so their bytes mean the same on a
+// host with four-byte pointers as on one with eight.
+//
+// It goes in its own file beside the state rather than inside it, because the
+// emulator has no business knowing what a cuDNN descriptor is.
+constexpr char kShimMagic[8] = {'V', 'V', 'S', 'H', 'I', 'M', '0', '1'};
+
+bool write_shim_state(const std::string& path) {
     std::FILE* f = std::fopen(path.c_str(), "wb");
-    if (!f) {
-        std::fprintf(stderr, "[snap] cannot write %s\n", path.c_str());
-        return -1;
+    if (!f) return false;
+    auto put = [&](const void* p, size_t n) { std::fwrite(p, 1, n, f); };
+    auto put64 = [&](uint64_t v) { put(&v, sizeof v); };
+    put(kShimMagic, sizeof kShimMagic);
+    put64(arena_size);
+    put64(arena_used);
+    put64(arena_free.size());
+    for (const auto& [size, off] : arena_free) { put64(size); put64(off); }
+    put64(live_blocks.size());
+    for (const auto& [off, size] : live_blocks) { put64(off); put64(size); }
+    put64(next_handle);
+    put64(descriptors.size());
+    for (const auto& [handle, d] : descriptors) {
+        put64(handle);
+        put64((uint64_t)d.kind);
+        int n = vvstub_descriptor_size(d.kind);
+        put64((uint64_t)n);
+        if (n > 0 && d.p) put(d.p, (size_t)n);
     }
+    bool good = std::ferror(f) == 0;
+    std::fclose(f);
+    return good;
+}
+
+bool read_shim_state(x86emu::Emulator& e, const std::string& path) {
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    auto get = [&](void* p, size_t n) { return std::fread(p, 1, n, f) == n; };
+    auto get64 = [&](uint64_t& v) { return get(&v, sizeof v); };
+    char magic[sizeof kShimMagic];
+    if (!get(magic, sizeof magic) || std::memcmp(magic, kShimMagic, sizeof magic) != 0) {
+        std::fclose(f);
+        std::fprintf(stderr, "[snap] %s is not a shim state\n", path.c_str());
+        return false;
+    }
+    uint64_t saved_size = 0, count = 0;
+    bool ok = get64(saved_size) && get64(arena_used);
+
+    // The arena itself came back with the rest of guest memory: it is a region
+    // like any other, marked contiguous, so restoring the address space mapped
+    // it and filled it.  What is left is to find it again - the host address is
+    // new, and must be, which is the whole reason none of them are written into
+    // the guest.  So this runs *after* the state is loaded, not before.
+    arena_size = saved_size;
+    arena_host = e.mem.host_span(kArenaBase, arena_size);
+    if (!arena_host) {
+        std::fprintf(stderr,
+                     "[snap] the restored state has no %.0f MB device arena at "
+                     "%llx - was it saved by a build with a different VVARENA?\n",
+                     arena_size / 1048576.0, (unsigned long long)kArenaBase);
+        arena_size = 0;
+        std::fclose(f);
+        return false;
+    }
+
+    arena_free.clear();
+    ok = ok && get64(count);
+    for (uint64_t i = 0; i < count && ok; i++) {
+        uint64_t size = 0, off = 0;
+        ok = get64(size) && get64(off);
+        if (ok) arena_free.emplace(size, off);
+    }
+    live_blocks.clear();
+    ok = ok && get64(count);
+    for (uint64_t i = 0; i < count && ok; i++) {
+        uint64_t off = 0, size = 0;
+        ok = get64(off) && get64(size);
+        if (ok) live_blocks[off] = size;
+    }
+    ok = ok && get64(next_handle);
+    descriptors.clear();
+    ok = ok && get64(count);
+    for (uint64_t i = 0; i < count && ok; i++) {
+        uint64_t handle = 0, kind = 0, n = 0;
+        ok = get64(handle) && get64(kind) && get64(n);
+        if (!ok) break;
+        void* d = vvstub_descriptor_new((int)kind);
+        if (!d || (int)n != vvstub_descriptor_size((int)kind)) {
+            std::fprintf(stderr, "[snap] descriptor %llu is of a kind this build "
+                                 "does not have\n", (unsigned long long)handle);
+            ok = false;
+            break;
+        }
+        ok = get(d, (size_t)n);
+        if (ok) descriptors[handle] = Descriptor{(int)kind, d};
+    }
+    std::fclose(f);
+    if (!ok) std::fprintf(stderr, "[snap] %s is truncated\n", path.c_str());
+    else
+        std::fprintf(stderr, "[snap] %.0f MB arena, %llu blocks live, %llu descriptors\n",
+                     arena_size / 1048576.0, (unsigned long long)live_blocks.size(),
+                     (unsigned long long)descriptors.size());
+    return ok;
+}
+
+// The measurement this started as: what a snapshot would weigh, and where the
+// weight is.  Kept because the answer is worth being able to re-check, and
+// because it is the thing that said "most of it is the runtime's own image".
+int64_t weigh_snapshot(x86emu::Emulator& e) {
+    constexpr uint64_t kPage = x86emu::Memory::kPageSize;
+    std::FILE* f = std::tmpfile();
+    if (!f) return -1;
 
     std::vector<uint64_t> pages = e.mem.live_pages();
     uint64_t zero = 0, written = 0;
@@ -520,6 +637,10 @@ struct Report {
 
 // ---------------------------------------------------------------------------
 
+bool vv_restore_shim(x86emu::Emulator& e, const std::string& path) {
+    return read_shim_state(e, path);
+}
+
 int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
     // The kernels read pointers out of device memory in four places - a concat's
     // list of inputs, a split's list of outputs - and those are guest addresses
@@ -546,8 +667,23 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
         case VVH_ALIVE:
             return 1;
 
-        case VVH_SNAPSHOT:
-            return write_snapshot(e, e.mem.read_cstring(a[0]));
+        case VVH_SNAPSHOT: {
+            // The shim's own bookkeeping is written now; the guest's state is
+            // asked for and taken once this call has returned, because a state
+            // caught inside the call that asked for it cannot be resumed from.
+            // Nothing between here and there changes the arena, so the two
+            // halves still agree.
+            std::string path = e.mem.read_cstring(a[0]);
+            if (!write_shim_state(path + ".shim")) {
+                std::fprintf(stderr, "[snap] cannot write %s.shim\n", path.c_str());
+                return -1;
+            }
+            e.request_state(path);
+            std::fprintf(stderr, "[snap] %s, at the next instruction\n", path.c_str());
+            return 0;
+        }
+        case VVH_WEIGH:
+            return weigh_snapshot(e);
 
         case VVH_MALLOC:
             return static_cast<int64_t>(device_alloc(e, a[0]));
@@ -580,7 +716,7 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
         case VVH_CUDNN_CREATE_TENSOR: {
             void* d = nullptr;
             cudnnCreateTensorDescriptor(&d);
-            return static_cast<int64_t>(remember_descriptor(d));
+            return static_cast<int64_t>(remember_descriptor(VVSTUB_DESC_TENSOR, d));
         }
         case VVH_CUDNN_DESTROY_TENSOR: {
             int rc = cudnnDestroyTensorDescriptor(descriptor(a[0]));
@@ -590,7 +726,7 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
         case VVH_CUDNN_CREATE_FILTER: {
             void* d = nullptr;
             cudnnCreateFilterDescriptor(&d);
-            return static_cast<int64_t>(remember_descriptor(d));
+            return static_cast<int64_t>(remember_descriptor(VVSTUB_DESC_FILTER, d));
         }
         case VVH_CUDNN_DESTROY_FILTER: {
             int rc = cudnnDestroyFilterDescriptor(descriptor(a[0]));
@@ -600,7 +736,7 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
         case VVH_CUDNN_CREATE_CONV: {
             void* d = nullptr;
             cudnnCreateConvolutionDescriptor(&d);
-            return static_cast<int64_t>(remember_descriptor(d));
+            return static_cast<int64_t>(remember_descriptor(VVSTUB_DESC_CONV, d));
         }
         case VVH_CUDNN_DESTROY_CONV: {
             int rc = cudnnDestroyConvolutionDescriptor(descriptor(a[0]));

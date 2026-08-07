@@ -139,6 +139,31 @@ void im2col(const float* x, int c_in, int in_len, int k, int pad, int stride,
 
 extern "C" {
 
+// A descriptor's bytes, and a descriptor built back from them.
+//
+// These three structs are ints and nothing else - no pointer, no size_t - so
+// their bytes mean the same on a host where a pointer is eight bytes and one
+// where it is four.  That is what lets a session saved by the native build
+// resume in the WebAssembly one, and it is worth keeping true: adding a field
+// that is not a fixed-width integer would break it silently.
+int vvstub_descriptor_size(int kind) {
+    switch (kind) {
+        case VVSTUB_DESC_TENSOR: return (int)sizeof(TensorDesc);
+        case VVSTUB_DESC_FILTER: return (int)sizeof(FilterDesc);
+        case VVSTUB_DESC_CONV:   return (int)sizeof(ConvDesc);
+        default: return 0;
+    }
+}
+
+void* vvstub_descriptor_new(int kind) {
+    switch (kind) {
+        case VVSTUB_DESC_TENSOR: return new TensorDesc();
+        case VVSTUB_DESC_FILTER: return new FilterDesc();
+        case VVSTUB_DESC_CONV:   return new ConvDesc();
+        default: return nullptr;
+    }
+}
+
 int cudnnCreateTensorDescriptor(void** d) { *d = new TensorDesc(); return kOk; }
 int cudnnDestroyTensorDescriptor(void* d) { delete (TensorDesc*)d; return kOk; }
 

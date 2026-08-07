@@ -46,11 +46,15 @@ enum {
     VVH_MEMCPY2D,          // (dst, dpitch, src, spitch, width, height, kind)
     VVH_LAUNCH,            // (mangled name in guest memory, guest args array)
     VVH_ALIVE = 15,        // () -> 1; how the guest finds out the host is there
-    // (path in guest memory) -> bytes written.  Dumps the live guest pages and
-    // the device arena, so that "what would a session snapshot cost" can be
-    // answered with a number instead of an estimate.  Writing is all it does:
-    // restoring is the other half and is not written yet.
+    // (path in guest memory) -> bytes written, or -1.  Writes the guest's whole
+    // state through the emulator, and the shim's own bookkeeping - the arena's
+    // free list and the descriptor table - beside it as PATH.shim.  Resuming is
+    // vvcudaemu's --resume, which is not a host call: it happens before the
+    // guest starts.
     VVH_SNAPSHOT = 16,
+    // () -> bytes a snapshot would come to.  The measurement, kept separate from
+    // taking one: it writes nothing and answers where the weight is.
+    VVH_WEIGH = 17,
 
     // cuDNN.  Descriptors are host objects; the guest only ever holds handles.
     VVH_CUDNN_CREATE_TENSOR = 100,

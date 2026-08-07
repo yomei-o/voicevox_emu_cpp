@@ -52,6 +52,16 @@ int vvstub_kernel_nargs(const char* name);
 // guess which words are addresses - an element count beside the upper half of a
 // pointer reads as one.
 int vvstub_kernel_layout(const char* name, unsigned* ptrs, unsigned* arrays);
+// The three kinds of cuDNN descriptor this build has, for a caller that has to
+// write the table down and build it again later.  Implemented in cudnn_real.cpp,
+// where the structs are: all three are fixed-width integers and nothing else, so
+// their bytes carry between a host with eight-byte pointers and one with four.
+#define VVSTUB_DESC_TENSOR 1
+#define VVSTUB_DESC_FILTER 2
+#define VVSTUB_DESC_CONV   3
+int vvstub_descriptor_size(int kind);
+void* vvstub_descriptor_new(int kind);
+
 // How to dereference a device pointer, when it is not already a host one.
 // Unset natively; set by the emulator's host shim, where device memory lives at
 // a guest address.
