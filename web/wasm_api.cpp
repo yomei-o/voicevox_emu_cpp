@@ -72,7 +72,13 @@ void attach_output(x86emu::Emulator& emu) {
 }
 
 // Everything after a successful load: log the image, run, capture the result.
+//
+// The count reported is what *this* run executed.  A resumed guest starts with
+// the count the saved one had reached, and reporting that as the work just done
+// turned thirty-six seconds into "7.7 billion instructions" - a rate nothing
+// could achieve, from a number that was not measuring this run at all.
 int run_loaded(x86emu::Emulator& emu) {
+    const uint64_t started_at = emu.cpu().instructions_executed;
     g_format = emu.image().format;
     {
         char buf[160];
@@ -87,10 +93,10 @@ int run_loaded(x86emu::Emulator& emu) {
         code = emu.run();
     } catch (const std::exception& err) {
         g_error = err.what();
-        g_instructions = emu.cpu().instructions_executed;
+        g_instructions = emu.cpu().instructions_executed - started_at;
         return -1;
     }
-    g_instructions = emu.cpu().instructions_executed;
+    g_instructions = emu.cpu().instructions_executed - started_at;
     return code;
 }
 
