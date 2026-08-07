@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VOICEVOX、CUDA ビルドを WebAssembly で</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 15px/1.7 system-ui, -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", sans-serif;
+    margin: 0 auto; padding: 2rem 1.25rem 4rem; max-width: 46rem;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .sub { color: #888; margin: 0 0 2rem; }
+  fieldset { border: 1px solid #8884; border-radius: 6px; padding: 1rem 1.1rem; margin: 0 0 1.25rem; }
+  legend { padding: 0 .4rem; color: #888; font-size: .85rem; }
+  label { display: block; margin: .5rem 0 .25rem; font-size: .9rem; }
+  input[type=text] { width: 100%; padding: .5rem .6rem; font: inherit;
+                     border: 1px solid #8886; border-radius: 4px; background: transparent; color: inherit; }
+  button { font: inherit; padding: .5rem 1.1rem; border-radius: 4px; border: 1px solid #8886;
+           background: #6663; color: inherit; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  progress { width: 100%; height: .5rem; margin-top: .75rem; }
+  #status { margin: 1rem 0 .25rem; min-height: 1.5em; }
+  #log { white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace; background: #8881;
+         padding: .75rem; border-radius: 4px; max-height: 22rem; overflow: auto; margin-top: 1rem; }
+  table { border-collapse: collapse; margin: .5rem 0 0; font-size: .9rem; }
+  td { padding: .15rem .9rem .15rem 0; }
+  td:first-child { color: #888; }
+  .warn { color: #c60; }
+  a { color: inherit; }
+</style>
+
+<h1>VOICEVOX の CUDA ビルドを、WebAssembly で</h1>
+<p class="sub">
+  GPU の無いブラウザで、CUDA 版 ONNX Runtime を動かします。カーネルはエミュレータの
+  外側 — コンパイル済みの WebAssembly — で計算されるので、合成が数時間ではなく数十秒で終わります。
+  <a href="https://github.com/yomei-o/voicevox_emu_cpp/blob/main/CUDA_SHIM.md">仕組み</a>
+</p>
+
+<fieldset>
+  <legend>まず、CUDA ビルドの3ファイルを選んでください</legend>
+  <p style="margin:.25rem 0 .75rem">
+    このリポジトリは CPU 版しか持っていないので、CUDA 版は手元のものを使います。
+    ページの外には出ません。<br>
+    <a href="https://github.com/VOICEVOX/onnxruntime-builder/releases">voicevox_onnxruntime の CUDA 版</a>
+    を展開した <code>lib/</code> から、次の3つを選びます:
+  </p>
+  <table>
+    <tr><td>libvoicevox_onnxruntime.so.1.17.3</td><td>18 MB</td></tr>
+    <tr><td>libvoicevox_onnxruntime_providers_shared.so</td><td>14 KB</td></tr>
+    <tr><td>libvoicevox_onnxruntime_providers_cuda.so</td><td>440 MB</td></tr>
+  </table>
+  <p class="warn" style="margin:.75rem 0 0; font-size:.85rem">
+    440 MB のうち 419 MB は GPU の機械語で、ここでは一度も実行されません。
+    <code>tools/slim_provider.sh</code> を通したものなら、中身がゼロになるだけで同じように動きます。
+  </p>
+  <label for="libs">3ファイルを選択（まとめて選べます）</label>
+  <input type="file" id="libs" multiple>
+</fieldset>
+
+<fieldset>
+  <legend>喋らせる</legend>
+  <label for="text">テキスト</label>
+  <input type="text" id="text" value="ずんだもんなのだ">
+  <p style="margin:.75rem 0 0">
+    <button id="go">合成する</button>
+    <span style="color:#888; font-size:.85rem; margin-left:.5rem">
+      初回はセッション構築に十数分かかります。合成そのものは数十秒です。
+    </span>
+  </p>
+  <progress id="bar" value="0" max="1" hidden></progress>
+</fieldset>
+
+<div id="status"></div>
+<div id="result"></div>
+<div id="log" hidden></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const log = (text) => { $('log').hidden = false; $('log').textContent += text;
+                        $('log').scrollTop = $('log').scrollHeight; };
+
+let worker = null;
+
+$('go').addEventListener('click', () => {
+    const files = [...$('libs').files];
+    if (files.length === 0) {
+        $('status').textContent = '先に CUDA ビルドの3ファイルを選んでください。';
+        return;
+    }
+    $('go').disabled = true;
+    $('result').textContent = '';
+    $('bar').hidden = false;
+
+    worker = new Worker('cuda_worker.js');
+    worker.onmessage = (e) => {
+        const m = e.data;
+        if (m.type === 'status') $('status').textContent = m.text;
+        else if (m.type === 'out') log(m.text);
+        else if (m.type === 'progress') { $('bar').max = m.total; $('bar').value = m.done; }
+        else if (m.type === 'error') {
+            $('status').innerHTML = '<span class="warn">失敗: ' + m.text + '</span>';
+            $('go').disabled = false;
+            $('bar').hidden = true;
+        } else if (m.type === 'wav') {
+            const url = URL.createObjectURL(new Blob([m.wav], { type: 'audio/wav' }));
+            $('status').textContent = 'できました。';
+            $('bar').hidden = true;
+            $('result').innerHTML =
+                '<audio controls src="' + url + '"></audio>' +
+                '<table><tr><td>全体</td><td>' + m.seconds.toFixed(1) + ' 秒</td></tr>' +
+                '<tr><td>エミュレートした命令</td><td>' +
+                (m.instructions / 1e9).toFixed(2) + ' G</td></tr>' +
+                '<tr><td>毎秒</td><td>' +
+                (m.instructions / m.seconds / 1e6).toFixed(1) + ' M</td></tr>' +
+                '<tr><td>WebAssembly ヒープ</td><td>' +
+                (m.heap / 1048576).toFixed(0) + ' MB</td></tr></table>' +
+                '<p style="font-size:.85rem;color:#888">' +
+                'この音声は、Tesla T4 が同じ入力から出したものと 12988 中 8 まで一致します。</p>';
+            $('go').disabled = false;
+        }
+    };
+    worker.postMessage({ type: 'speak', text: $('text').value, files });
+});
+</script>
+</html>

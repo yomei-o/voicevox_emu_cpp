@@ -24,6 +24,13 @@ includes Windows on ARM and a browser tab.
 watch the real Open JTalk work out the accent inside an emulated CPU, in about a
 second. The synthesis button is there too, and honest about costing hours.
 
+**And a second one**, [`web/cuda.html`](web/cuda.html), where synthesis takes
+**twenty-two seconds** instead: it runs the *CUDA* build of the runtime and
+answers its kernels with compiled WebAssembly rather than interpreting them.
+It needs the CUDA libraries, which this repository does not carry, so the page
+asks for them from disk - nothing leaves the tab. Building the sessions still
+takes about thirteen minutes and is now the whole cost of a run.
+
 ## State
 
 **It speaks.** `voicevox_synthesizer_load_voice_model` decrypts the model and
