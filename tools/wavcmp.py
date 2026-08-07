@@ -64,4 +64,7 @@ def main():
     sys.exit(0 if worst == 0 else 1)
 
 
-main()
+# Guarded, because tools/wavstat.py imports read_wav from here rather than
+# keeping a second copy of the RIFF parser.
+if __name__ == "__main__":
+    main()
