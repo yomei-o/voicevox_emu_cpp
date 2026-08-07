@@ -19,7 +19,7 @@ TEXT=${1:-あ}
 sh unpack.sh
 mkdir -p "$OUT" sysroot/lib/x86_64-linux-gnu
 cp guest/cudavvm guest/libvoicevox_core.so guest/0.vvm "$OUT/"
-cp guest/cudastub/*.so.* sysroot/lib/x86_64-linux-gnu/
+cp guest/cudaguest/*.so.* sysroot/lib/x86_64-linux-gnu/
 cp "$CUDA/libvoicevox_onnxruntime.so.1.17.3" "$OUT/"
 cp "$CUDA/libvoicevox_onnxruntime_providers_shared.so" "$OUT/"
 

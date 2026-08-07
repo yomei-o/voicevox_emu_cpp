@@ -346,9 +346,23 @@ int64_t do_syscall(Emulator& e, Sys sys, const uint64_t a[6]) {
             if (!(flags & kMapAnon) && fd >= 0 && e.files.valid(fd)) {
                 int64_t saved = e.files.tell(fd);   // mmap must not disturb the fd
                 if (e.files.seek(fd, static_cast<int64_t>(offset), 0) >= 0) {
-                    std::vector<uint8_t> buf(static_cast<size_t>(len));
-                    int64_t got = e.files.read(fd, buf.data(), len);   // short at EOF -> rest stays zero
-                    if (got > 0) e.mem.write(target, buf.data(), static_cast<uint64_t>(got));
+                    // A chunk at a time, not the whole segment.  One library
+                    // here has a 430 MB PT_LOAD, and reading it into a single
+                    // buffer put 430 MB on the peak for the duration of one
+                    // syscall - on top of the pages it was being copied into.
+                    // The chunk is page-aligned so that Memory::write can still
+                    // recognise a whole page of zeros and leave it unbacked.
+                    constexpr uint64_t kChunk = 1u << 20;
+                    std::vector<uint8_t> buf(static_cast<size_t>(len < kChunk ? len : kChunk));
+                    uint64_t done = 0;
+                    while (done < len) {
+                        uint64_t want = len - done;
+                        if (want > kChunk) want = kChunk;
+                        int64_t got = e.files.read(fd, buf.data(), want);
+                        if (got <= 0) break;   // short at EOF -> the rest stays zero
+                        e.mem.write(target + done, buf.data(), static_cast<uint64_t>(got));
+                        done += static_cast<uint64_t>(got);
+                    }
                 }
                 if (saved >= 0) e.files.seek(fd, saved, 0);
             }

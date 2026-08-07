@@ -43,7 +43,7 @@ cp guest/cudavvm guest/libvoicevox_core.so "guest/$VVM" "$OUT/"
 # at the host and include -mavx2, and an emulator with no VEX decoder stops on
 # the first `vmovq` of our own stub.  OPT=-O2 is what makes them guest code.
 mkdir -p sysroot/lib/x86_64-linux-gnu
-cp guest/cudastub/*.so.* sysroot/lib/x86_64-linux-gnu/
+cp guest/cudaguest/*.so.* sysroot/lib/x86_64-linux-gnu/
 cp "$VVCUDA/libvoicevox_onnxruntime.so.1.17.3" "$OUT/"
 cp "$VVCUDA/libvoicevox_onnxruntime_providers_shared.so" "$OUT/"
 

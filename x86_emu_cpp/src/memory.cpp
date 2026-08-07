@@ -30,10 +30,10 @@ void Memory::map(uint64_t addr, uint64_t size, const std::string& name) {
     if (size == 0) return;
     uint64_t first = addr >> kPageBits;
     uint64_t last = (addr + size - 1) >> kPageBits;
-    for (uint64_t p = first; p <= last; ++p) {
-        auto& slot = pages_[p];
-        if (!slot) slot = std::make_unique<Page>();
-    }
+    // Reserve, do not allocate.  operator[] default-constructs a null
+    // unique_ptr, which is exactly the "reserved" state; a page that already
+    // has memory behind it keeps it.
+    for (uint64_t p = first; p <= last; ++p) pages_[p];
     if (!name.empty()) regions_.push_back({addr, size, name});
 }
 
@@ -64,6 +64,10 @@ uint8_t* Memory::host_ptr_slow(uint64_t addr, bool for_write) const {
                       static_cast<unsigned long long>(addr));
         throw MemoryFault(addr, for_write, buf);
     }
+    // Reserved but never touched: the memory appears now, zero filled, which is
+    // what the guest was promised when it mapped the range.  Reading is as good
+    // a reason as writing - a fresh page reads as zero either way.
+    if (!it->second) it->second = std::make_unique<Page>();
     uint8_t* base = it->second->data();
     TlbEntry& e = tlb_[page & (kTlbSize - 1)];
     e.page = page;
@@ -92,7 +96,14 @@ void Memory::write(uint64_t addr, const void* src, uint64_t len) {
         uint64_t off = addr & kPageMask;
         uint64_t n = kPageSize - off;
         if (n > len) n = len;
-        std::memcpy(host_ptr(addr, true), in, n);
+        // A whole page of zeros over a page that has never been touched is a
+        // no-op, and skipping it leaves the page unbacked.  That is not a
+        // micro-optimisation: a loader mapping a library whose 419 MB of device
+        // code the emulator never runs writes exactly this, page after page.
+        bool all_zero = n == kPageSize && unbacked(addr);
+        for (uint64_t i = 0; all_zero && i < n; ++i)
+            if (in[i]) all_zero = false;
+        if (!all_zero) std::memcpy(host_ptr(addr, true), in, n);
         in += n;
         addr += n;
         len -= n;

@@ -42,6 +42,7 @@ build/isatest_*.txt
 browser_out.wav
 guest/ssebench
 guest/cudastub/
+guest/cudaguest/
 guest/cudaprobe
 guest/cudavvm
 cuda/

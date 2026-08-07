@@ -49,6 +49,13 @@ public:
 
     // Makes [addr, addr+size) readable/writable, zero filled.  Pages that are
     // already present are left untouched, so overlapping maps are harmless.
+    //
+    // The pages are *reserved*, not allocated: the table gets an empty slot for
+    // each and the 4 KiB behind it appears on the first access.  A slot is
+    // about fifty bytes against the page's four thousand, which is the
+    // difference between a guest that maps a 460 MB library and one that can.
+    // Most of that library is device code the emulator never runs; a segment of
+    // it that is never touched now costs nothing.
     void map(uint64_t addr, uint64_t size, const std::string& name = "");
 
     bool is_mapped(uint64_t addr) const {
@@ -74,7 +81,8 @@ public:
     // clone_from() clear it and nothing else has to.  map() never replaces a
     // page that exists, and a miss is never cached, so neither can invalidate
     // anything.  The pages themselves are separately allocated, so the table
-    // rehashing does not move them.
+    // rehashing does not move them.  A reserved-but-unbacked page is never
+    // cached either - host_ptr_slow allocates it first.
     static constexpr int kTlbBits = 10;
     static constexpr int kTlbSize = 1 << kTlbBits;
     static constexpr uint64_t kTlbNone = ~0ull;
@@ -124,7 +132,7 @@ public:
         pages_.clear();
         tlb_flush();
         for (const auto& [index, page] : other.pages_)
-            pages_[index] = std::make_unique<Page>(*page);
+            pages_[index] = page ? std::make_unique<Page>(*page) : nullptr;
         regions_ = other.regions_;
     }
 
@@ -178,6 +186,16 @@ private:
         write(addr, &v, sizeof(T));
     }
 
+    // Whether a page is reserved but has never been touched.  Such a page
+    // reads as zero, so writing zeros over the whole of one is a no-op - which
+    // is what keeps a library's 419 MB of unused device code from being copied
+    // into memory it will never be read from.
+    bool unbacked(uint64_t addr) const {
+        auto it = pages_.find(addr >> kPageBits);
+        return it != pages_.end() && !it->second;
+    }
+
+    // A null slot means reserved; the Page appears on first access.
     mutable std::unordered_map<uint64_t, std::unique_ptr<Page>> pages_;
     mutable TlbEntry tlb_[kTlbSize];
     std::vector<Region> regions_;

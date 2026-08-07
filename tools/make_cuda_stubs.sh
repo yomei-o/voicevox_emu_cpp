@@ -22,8 +22,6 @@ SRC=${1:-cuda/voicevox_onnxruntime-linux-x64-cuda-1.17.3/lib}
 PROVIDER="$SRC/libvoicevox_onnxruntime_providers_cuda.so"
 [ -f "$PROVIDER" ] || { echo "no $PROVIDER"; exit 1; }
 
-OUT=guest/cudastub
-mkdir -p "$OUT"
 
 # The optimiser flags.  These stand-ins run *outside* the emulator, on the real
 # host, so unlike the guest they may use whatever the host has - and the
@@ -52,6 +50,7 @@ case "$MODE" in
         RUNTIME_SRC="src/cudastub.c src/cudakernels.c src/cudainfo.c"
         CUDNN_SRC="src/cudnn_real.cpp"
         CUBLAS_SRC="src/cublas_real.cpp"
+        OUT=guest/cudastub
         ;;
     guest)
         RUNTIME_SRC="src/cudaguest.c src/cudainfo.c"
@@ -60,10 +59,16 @@ case "$MODE" in
         # The guest is SSE2 and has no VEX decoder.  The host flags below would
         # put an AVX `vmovq` in the very first stub the provider calls.
         [ -z "$OPT" ] && OPT="-O2"
+        OUT=guest/cudaguest
         ;;
     *) echo "MODE must be native or guest"; exit 1 ;;
 esac
-echo "mode $MODE"
+# Separate directories, because the two builds share every file name and only
+# one of them may be loaded by the emulator.  Sharing one directory meant a
+# native rebuild silently put AVX into the guest's libcudart, and the provider
+# stopped on the first `vmovq` of a stub written for the other half.
+mkdir -p "$OUT"
+echo "mode $MODE -> $OUT"
 
 if [ -z "$OPT" ]; then
     if grep -q ' avx2 ' /proc/cpuinfo 2>/dev/null; then
