@@ -168,8 +168,12 @@ async function prepare(supplied) {
     status(`ダウンロード (${total}/${total}): Open JTalk 辞書`);
     const gz = await fetchBytes('../guest/open_jtalk_dic_utf_8-1.11.tar.gz');
     status('辞書を展開しています (103 MB)');
-    untarBytes(await gunzip(gz),
-               (name, data) => writeInto('/opt/vvcuda/open_jtalk_dic_utf_8-1.11/' + name, data));
+    // Into the *parent*: every entry in the archive is already prefixed with
+    // `open_jtalk_dic_utf_8-1.11/`.  Naming the directory here as well put
+    // sys.dic one level below where the guest was told to look, and Mecab_load
+    // reported a directory it could not open - which is true, and says nothing
+    // about why.
+    untarBytes(await gunzip(gz), (name, data) => writeInto('/opt/vvcuda/' + name, data));
     post({ type: 'progress', done: total, total });
     ready = true;
 }

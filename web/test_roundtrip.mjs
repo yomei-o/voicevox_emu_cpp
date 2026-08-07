@@ -72,8 +72,20 @@ put('/opt/vvcuda/libvoicevox_onnxruntime_providers_shared.so',
 const slim = path.join(home, 'vv/slimtest/libvoicevox_onnxruntime_providers_cuda.so');
 put('/opt/vvcuda/libvoicevox_onnxruntime_providers_cuda.so',
     fs.existsSync(slim) ? slim : path.join(cuda, 'libvoicevox_onnxruntime_providers_cuda.so'));
-putTree('/opt/vvcuda/open_jtalk_dic_utf_8-1.11',
-        path.join(root, 'guest/open_jtalk_dic_utf_8-1.11'));
+// The dictionary the way the page gets it - out of the tarball, into the
+// parent, because every entry in it is already prefixed with the directory's
+// name.  Copying an unpacked tree instead is easier and tests a path the page
+// does not take: it hid a bug where the page named the directory twice and
+// Mecab_load could not find sys.dic.
+{
+    const { execFileSync } = await import('node:child_process');
+    const dir = path.join(root, 'build/dic');
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    execFileSync('tar', ['xzf', path.join(root, 'guest/open_jtalk_dic_utf_8-1.11.tar.gz'),
+                         '-C', dir]);
+    for (const name of fs.readdirSync(dir)) putTree('/opt/vvcuda/' + name, path.join(dir, name));
+}
 
 mod.ccall('emu_set_sysroot', null, ['string'], [SYSROOT]);
 mod.FS.mkdirTree('/state');
