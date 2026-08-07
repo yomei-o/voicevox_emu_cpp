@@ -20,7 +20,15 @@ extern "C" char** environ;
 namespace x86emu {
 
 Emulator::Emulator(Options opt) : opt_(opt) {}
-Emulator::~Emulator() = default;
+Emulator::~Emulator() {
+    // The profile is printed here rather than by the caller: every front end
+    // would otherwise have to remember to, and the one that forgets is the one
+    // being used when the question comes up.
+    if (cpu_ && cpu_->profiling()) {
+        std::string report = cpu_->profile_report();
+        if (!report.empty()) std::fputs(report.c_str(), stderr);
+    }
+}
 
 Abi Emulator::abi() const {
     if (!is64()) return Abi::Cdecl32;
@@ -1359,6 +1367,12 @@ void Emulator::load_bytes(const std::vector<uint8_t>& file, const std::vector<st
     image_.format = format;
 
     cpu_ = std::make_unique<Cpu>(mem, mode);
+    // X86EMU_PROFILE=N: sample the instruction pointer every N instructions.
+    // Reported by mapping at teardown - see Cpu::profile_report.
+    if (const char* pv = std::getenv("X86EMU_PROFILE")) {
+        uint64_t every = std::strtoull(pv, nullptr, 0);
+        if (every) cpu_->enable_profile(every);
+    }
     cpu_->trace = opt_.trace;
     files.set_text_translation(os_kind == Os::Windows);
     // A Windows CRT block-buffers stdout unless it is a terminal.  Matching that

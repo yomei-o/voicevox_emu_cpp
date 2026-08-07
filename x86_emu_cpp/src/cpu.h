@@ -137,6 +137,21 @@ public:
         history_filled_ = 0;
     }
     size_t history_size() const { return history_.size(); }
+
+    // X86EMU_PROFILE=N samples the instruction pointer every N instructions and
+    // reports, at exit, which mapping the samples fell in.  A guest that spends
+    // six minutes somewhere will not say where on its own, and "which library"
+    // is usually the whole answer - especially now that a file mapping is named
+    // after its file.
+    //
+    // The cost when it is off is one decrement and a not-taken branch, which is
+    // less than the hook check already sitting in the same path.
+    void enable_profile(uint64_t every) {
+        profile_every_ = every;
+        profile_countdown_ = every ? every : ~0ull;
+    }
+    bool profiling() const { return profile_every_ != 0; }
+    std::string profile_report() const;
     // The addresses, oldest first.
     std::vector<uint64_t> history() const;
 
@@ -291,6 +306,9 @@ private:
     std::vector<uint64_t> history_;
     size_t history_pos_ = 0;
     size_t history_filled_ = 0;
+    uint64_t profile_every_ = 0;
+    uint64_t profile_countdown_ = ~0ull;
+    std::vector<uint64_t> profile_samples_;
 
     Memory& mem_;
     Mode mode_;

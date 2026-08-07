@@ -2,8 +2,11 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace x86emu {
 
@@ -959,6 +962,44 @@ void Cpu::execute_0f() {
 // Main dispatch
 // ---------------------------------------------------------------------------
 
+// Where the samples fell, by mapping, commonest first.
+//
+// Regions can overlap - map() is called with a name more than once over the
+// same span - so a sample is attributed to the *last* one that contains it,
+// which is the same rule the fault message uses and keeps the two consistent.
+std::string Cpu::profile_report() const {
+    if (profile_samples_.empty()) return {};
+    const auto& regions = mem_.regions();
+    std::unordered_map<std::string, uint64_t> hits;
+    uint64_t unattributed = 0;
+    for (uint64_t rip : profile_samples_) {
+        const std::string* where = nullptr;
+        for (const auto& r : regions)
+            if (rip >= r.base && rip < r.base + r.size) where = &r.name;
+        if (where)
+            hits[*where]++;
+        else
+            unattributed++;
+    }
+    std::vector<std::pair<uint64_t, std::string>> sorted;
+    for (const auto& [name, n] : hits) sorted.push_back({n, name});
+    if (unattributed) sorted.push_back({unattributed, "(unmapped or hooks)"});
+    std::sort(sorted.rbegin(), sorted.rend());
+
+    std::string out = "[profile] " + std::to_string(profile_samples_.size()) +
+                      " samples, one every " + std::to_string(profile_every_) +
+                      " instructions\n";
+    char line[256];
+    double total = static_cast<double>(profile_samples_.size());
+    for (const auto& [n, name] : sorted) {
+        std::snprintf(line, sizeof line, "[profile] %6.2f %%  %8llu  %s\n",
+                      100.0 * static_cast<double>(n) / total,
+                      static_cast<unsigned long long>(n), name.c_str());
+        out += line;
+    }
+    return out;
+}
+
 void Cpu::unsupported(const char* what, uint8_t opcode, uint64_t start_rip) {
     // Show a few raw bytes so an unknown encoding can be looked up quickly.
     char bytes[64] = {};
@@ -994,6 +1035,10 @@ void Cpu::step() {
 
     uint64_t start = rip;
     g_watch_rip = start;
+    if (--profile_countdown_ == 0) {
+        profile_countdown_ = profile_every_ ? profile_every_ : ~0ull;
+        if (profile_every_) profile_samples_.push_back(start);
+    }
     if (g_census) g_census->record(start);
     if (!history_.empty()) {
         history_[history_pos_] = start;
