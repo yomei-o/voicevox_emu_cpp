@@ -24,12 +24,24 @@ includes Windows on ARM and a browser tab.
 watch the real Open JTalk work out the accent inside an emulated CPU, in about a
 second. The synthesis button is there too, and honest about costing hours.
 
-**And a second one**, [`web/cuda.html`](web/cuda.html), where synthesis takes
-**twenty-two seconds** instead: it runs the *CUDA* build of the runtime and
-answers its kernels with compiled WebAssembly rather than interpreting them.
-It needs the CUDA libraries, which this repository does not carry, so the page
-asks for them from disk - nothing leaves the tab. Building the sessions still
-takes about thirteen minutes and is now the whole cost of a run.
+**And a second one:**
+<https://yomei-o.github.io/voicevox_emu_cpp/web/cuda.html> — where synthesis
+takes **twenty-two seconds** instead. It runs the *CUDA* build of the runtime
+and answers its kernels with compiled WebAssembly rather than interpreting
+them. It needs the CUDA libraries, which this repository does not carry, so the
+page asks for them from disk - nothing leaves the tab.
+
+Building the sessions takes about thirteen minutes, and that page will now
+**save one** when it is done. Load the two files it gives you and the thirteen
+minutes are gone: each phrase after that is the synthesis alone, and you can
+say something different every time. A session saved by the native build resumes
+in the browser and the other way round - nothing in the file is a host address
+or sized by a host word, which is what the guest-space device arena was for.
+
+The saved session is 166 MB and is not in this repository. Compressing it does
+not help much (117 MB with xz); the bytes are model weights, and floats do not
+compress. `tools/stateanalyse.py` says where the weight is and why the obvious
+ways of reducing it do not work.
 
 ## State
 
@@ -124,6 +136,44 @@ and what it measures.
 the calling process instead, which is the one to debug against: it runs in a
 second, and `sh tools/check_shim.sh` holds it to sixteen reference values that
 a Tesla T4 and a desktop CPU both produce.
+
+## Building the sessions once
+
+Almost all of a run is decrypting the model and building the sessions - 280
+seconds under the emulator, thirteen minutes in a browser - and none of it
+depends on what is about to be said. The emulator can write the guest down at
+that point and carry on from it later.
+
+    sh tools/wslresume.sh          # build, save, resume, and check the audio
+    sh tools/wslresume2.sh "こんにちは"   # resume again, saying something else
+
+    ./vvcudaemu --resume ~/vv/session.state ... # or by hand
+
+|  |  |
+| --- | --- |
+| build the sessions | 280 s |
+| resume from the saved one | **13 s** |
+| the audio | the same, to 8 parts in 12988 |
+| instructions | 7.7 G to build, 23 M to speak |
+
+The state is written by `Emulator::save_state` (x86_emu_cpp) and holds guest
+memory, registers, the allocator's bookkeeping and the open descriptors. None
+of it is a host address or sized by a host word, so **a session saved by the
+native build resumes in the WebAssembly one**, where a pointer is four bytes -
+`sh tools/wslresumewasm.sh` does exactly that and produces the same WAV. That
+is what device memory living at a guest address (`Memory::map_contiguous`) was
+for. The shim's own half - the arena's free list and the cuDNN descriptor table
+- goes beside it as `<state>.shim`, six kilobytes of it.
+
+What a resumed run says is still open, because the state is taken with the
+sessions built and no kernel launched. What is *not* open is the command line:
+argv was written into the guest's stack when it was loaded and comes back with
+the rest of its memory. Only what the guest reads after the snapshot point can
+vary, which for `cudavvm` is the text file.
+
+`sh tools/wslroundtrip.sh` runs the whole sequence - build, save, resume, say
+two different things - through the WebAssembly entry points the demo page uses,
+so a break in the page shows up without twenty minutes of clicking.
 
 ## The drop-in API
 

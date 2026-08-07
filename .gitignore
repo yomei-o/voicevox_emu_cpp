@@ -52,3 +52,8 @@ build/api/eigentest*
 # them (see run_cudavvm.sh); they are build products either way.
 sysroot/lib/x86_64-linux-gnu/libcu*.so.*
 sysroot/lib/x86_64-linux-gnu/libcublas*.so.*
+
+# A saved session: 166 MB of decrypted weights, deliberately not carried here.
+# tools/wslresume.sh writes one; VVSNAP says where.
+*.state
+*.state.shim

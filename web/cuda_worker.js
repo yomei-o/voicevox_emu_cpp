@@ -12,11 +12,19 @@
 importScripts('untar.js');
 importScripts('x86emu_cuda.js');
 
+// The guest paths are the ones tools/wslrun_cuda.sh uses, deliberately.  A
+// saved session records the path it knew each file by, so a state built here
+// resumes there and one built there resumes here - which is the difference
+// between "the browser can save a session" and "the browser can save a session
+// only it can read".
 const SYSROOT = '/sysroot';
+const STATE = '/state/session';
 let Module = null;
 let runPath = null;
+let resumePath = null;
 let setSysroot = null;
 let setEnv = null;
+let guestEnv = null;
 let ready = false;
 
 const post = (msg, transfer) => self.postMessage(msg, transfer || []);
@@ -61,12 +69,16 @@ async function startModule() {
     Module = await createX86EmuCuda();
     runPath = Module.cwrap('emu_run_path', 'number',
                            ['string', 'array', 'number', 'number', 'number']);
+    resumePath = Module.cwrap('emu_resume_path', 'number',
+                              ['string', 'array', 'number', 'number', 'number', 'string']);
     setSysroot = Module.cwrap('emu_set_sysroot', null, ['string']);
     // Through the C library, because emscripten builds `environ` as the runtime
     // starts and never reads a later write to Module.ENV.  Without this the
     // shim's diagnostics are silently off, which looks like having nothing to
     // report.
     setEnv = Module.cwrap('emu_setenv', null, ['string', 'string']);
+    // And the guest's own, which is a different environment entirely.
+    guestEnv = Module.cwrap('emu_guest_setenv', null, ['string', 'string']);
 
     const decoder = new TextDecoder('utf-8', { fatal: false });
     globalThis.x86emuOutput = (fd, bytes) => out(decoder.decode(bytes, { stream: true }));
@@ -89,8 +101,8 @@ const FILES = [
     // cudavvm names libvoicevox_core.so with no RUNPATH, so it has to be where
     // a loader looks - beside the program is a shell's idea, not a loader's.
     ['/lib/x86_64-linux-gnu/libvoicevox_core.so', '../guest/libvoicevox_core.so'],
-    ['/opt/vv/cudavvm', 'guest/cudavvm', 493],
-    ['/opt/vv/0.vvm', '../guest/0.vvm'],
+    ['/opt/vvcuda/cudavvm', 'guest/cudavvm', 493],
+    ['/opt/vvcuda/0.vvm', '../guest/0.vvm'],
     // The forwarding stand-ins: SSE2, and they hand every kernel to the host.
     ['/lib/x86_64-linux-gnu/libcudart.so.12', 'guest/cudaguest/libcudart.so.12'],
     ['/lib/x86_64-linux-gnu/libcublas.so.12', 'guest/cudaguest/libcublas.so.12'],
@@ -103,9 +115,9 @@ const FILES = [
 // The names are matched loosely: a file picker hands back whatever the user
 // selected, and the three are told apart by what is in them.
 function classify(name) {
-    if (/providers_cuda/.test(name)) return '/opt/vv/libvoicevox_onnxruntime_providers_cuda.so';
-    if (/providers_shared/.test(name)) return '/opt/vv/libvoicevox_onnxruntime_providers_shared.so';
-    if (/libvoicevox_onnxruntime\.so/.test(name)) return '/opt/vv/libvoicevox_onnxruntime.so.1.17.3';
+    if (/providers_cuda/.test(name)) return '/opt/vvcuda/libvoicevox_onnxruntime_providers_cuda.so';
+    if (/providers_shared/.test(name)) return '/opt/vvcuda/libvoicevox_onnxruntime_providers_shared.so';
+    if (/libvoicevox_onnxruntime\.so/.test(name)) return '/opt/vvcuda/libvoicevox_onnxruntime.so.1.17.3';
     return null;
 }
 
@@ -113,9 +125,9 @@ async function prepare(supplied) {
     await startModule();
     if (ready) return;
 
-    const need = new Set(['/opt/vv/libvoicevox_onnxruntime.so.1.17.3',
-                          '/opt/vv/libvoicevox_onnxruntime_providers_shared.so',
-                          '/opt/vv/libvoicevox_onnxruntime_providers_cuda.so']);
+    const need = new Set(['/opt/vvcuda/libvoicevox_onnxruntime.so.1.17.3',
+                          '/opt/vvcuda/libvoicevox_onnxruntime_providers_shared.so',
+                          '/opt/vvcuda/libvoicevox_onnxruntime_providers_cuda.so']);
     for (const file of supplied) {
         const where = classify(file.name);
         if (!where) {
@@ -142,38 +154,89 @@ async function prepare(supplied) {
     const gz = await fetchBytes('../guest/open_jtalk_dic_utf_8-1.11.tar.gz');
     status('辞書を展開しています (103 MB)');
     untarBytes(await gunzip(gz),
-               (name, data) => writeInto('/opt/vv/open_jtalk_dic_utf_8-1.11/' + name, data));
+               (name, data) => writeInto('/opt/vvcuda/open_jtalk_dic_utf_8-1.11/' + name, data));
     post({ type: 'progress', done: total, total });
     ready = true;
 }
 
-function speak(text) {
-    writeInto('/opt/vv/text.txt', new TextEncoder().encode(text));
-    const args = [
-        '/opt/vv/cudavvm',
-        '/opt/vv/libvoicevox_onnxruntime.so.1.17.3',
-        '/opt/vv/open_jtalk_dic_utf_8-1.11',
-        '/opt/vv/0.vvm',
-        '3',
-        '@/opt/vv/text.txt',
-        '/opt/vv/out.wav',
-    ];
-    const blob = new TextEncoder().encode(args.join('\0') + '\0');
+// The guest's argument list.  It is the same every time, including where the
+// text comes from: `@path` means the guest reads the file, so what is said is
+// decided after the arguments were fixed - which is what lets a resumed run say
+// something the saved one never heard.  argv itself was written into the
+// guest's stack when it was loaded and comes back with the rest of its memory,
+// so it could not vary anyway.
+const ARGS = [
+    '/opt/vvcuda/cudavvm',
+    '/opt/vvcuda/libvoicevox_onnxruntime.so.1.17.3',
+    '/opt/vvcuda/open_jtalk_dic_utf_8-1.11',
+    '/opt/vvcuda/0.vvm',
+    '3',
+    '@/opt/vvcuda/text.txt',
+    '/opt/vvcuda/out.wav',
+];
+
+function argv() {
+    const blob = new TextEncoder().encode(ARGS.join('\0') + '\0');
+    return [blob, blob.length - 1];
+}
+
+// One run of the guest, from the beginning or from a saved session.
+function runGuest(state) {
+    const [blob, len] = argv();
     const started = Date.now();
-    const code = runPath(SYSROOT + '/opt/vv/cudavvm', blob, blob.length - 1, 0, 0);
-    const seconds = (Date.now() - started) / 1000;
+    const program = SYSROOT + '/opt/vvcuda/cudavvm';
+    const code = state ? resumePath(program, blob, len, 0, 0, state)
+                       : runPath(program, blob, len, 0, 0);
     if (code !== 0) {
         throw new Error('exit ' + code + ': ' +
                         Module.ccall('emu_error', 'string', [], []));
     }
-    const wav = Module.FS.readFile(SYSROOT + '/opt/vv/out.wav');
-    post({
-        type: 'wav',
-        wav: wav.buffer,
-        seconds,
+    return {
+        seconds: (Date.now() - started) / 1000,
         instructions: Module.ccall('emu_instructions', 'number', [], []),
         heap: Module.HEAPU8.length,
-    }, [wav.buffer]);
+    };
+}
+
+function speak(text, state) {
+    writeInto('/opt/vvcuda/text.txt', new TextEncoder().encode(text));
+    const stats = runGuest(state);
+    const wav = Module.FS.readFile(SYSROOT + '/opt/vvcuda/out.wav');
+    post({ type: 'wav', wav: wav.buffer, ...stats }, [wav.buffer]);
+}
+
+// Build the sessions and stop, so the twenty minutes can be paid once.
+//
+// The guest asks for the state itself, through VVSNAPSHOT - the same path the
+// native build takes.  It halts where it asks, with the sessions built and no
+// kernel launched, which is why what a resumed run says is still open.
+function build() {
+    try { Module.FS.mkdirTree('/state'); } catch (e) { /* already there */ }
+    // The *guest's* environment, not this process's.  emu_setenv is the other
+    // one, which the emulator and the shim read for their own diagnostics and
+    // the guest cannot see - setting VVSNAPSHOT there ran the whole thing
+    // through to synthesis without ever taking a snapshot.
+    guestEnv('VVSNAPSHOT', STATE);
+    writeInto('/opt/vvcuda/text.txt', new TextEncoder().encode('あ'));
+    const stats = runGuest(null);
+    guestEnv('VVSNAPSHOT', '');
+    // Handed over as Blobs rather than as bytes.  A Blob crosses by reference,
+    // so the page can turn it into a download without a second 166 MB of it
+    // existing: MEMFS already holds one, and the WebAssembly heap is near a
+    // gigabyte by this point.
+    const session = new Blob([Module.FS.readFile(STATE)],
+                             { type: 'application/octet-stream' });
+    const shim = new Blob([Module.FS.readFile(STATE + '.shim')],
+                          { type: 'application/octet-stream' });
+    post({ type: 'state', session, shim, ...stats });
+}
+
+// A session from a file the page was given.  Written where the emulator opens
+// it as a host path, outside the sysroot the guest can see.
+function loadState(session, shim) {
+    try { Module.FS.mkdirTree('/state'); } catch (e) { /* already there */ }
+    Module.FS.writeFile(STATE, new Uint8Array(session));
+    Module.FS.writeFile(STATE + '.shim', new Uint8Array(shim));
 }
 
 self.onmessage = async (e) => {
@@ -181,7 +244,20 @@ self.onmessage = async (e) => {
         if (e.data.type === 'speak') {
             await prepare(e.data.files || []);
             status('合成しています - セッション構築に十数分、そのあと合成は数十秒');
-            speak(e.data.text || 'ずんだもんなのだ');
+            speak(e.data.text || 'ずんだもんなのだ', null);
+        } else if (e.data.type === 'build') {
+            await prepare(e.data.files || []);
+            status('セッションを構築しています - 十数分かかります');
+            build();
+        } else if (e.data.type === 'resume') {
+            await prepare(e.data.files || []);
+            status('セッションを読み込んでいます');
+            loadState(e.data.session, e.data.shim);
+            status('話しています');
+            speak(e.data.text || 'ずんだもんなのだ', STATE);
+        } else if (e.data.type === 'again') {
+            status('話しています');
+            speak(e.data.text || 'ずんだもんなのだ', STATE);
         }
     } catch (err) {
         post({ type: 'error', text: String(err && err.message ? err.message : err) });

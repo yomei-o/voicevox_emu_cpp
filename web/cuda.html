@@ -59,17 +59,46 @@
 </fieldset>
 
 <fieldset>
-  <legend>喋らせる</legend>
+  <legend>セッションを作って保存する（一度だけ）</legend>
+  <p style="margin:.25rem 0 .75rem">
+    重いのはモデルの復号とセッション構築で、十数分かかります。そこまでを一度やって
+    <em>保存</em>しておけば、あとは何度でも、別の言葉を数十秒で喋らせられます。
+    保存されるのはブラウザが作ったファイルで、どこにも送られません。
+  </p>
+  <p style="margin:.75rem 0 0">
+    <button id="build">セッションを構築して保存する</button>
+    <span style="color:#888; font-size:.85rem; margin-left:.5rem">十数分かかります</span>
+  </p>
+</fieldset>
+
+<fieldset>
+  <legend>保存したセッションで喋らせる</legend>
+  <p style="margin:.25rem 0 .75rem">
+    上で保存した2つのファイル（<code>session.state</code> と <code>session.state.shim</code>）
+    を選ぶと、構築を飛ばして始められます。
+  </p>
+  <label for="state">セッションの2ファイル</label>
+  <input type="file" id="state" multiple>
   <label for="text">テキスト</label>
   <input type="text" id="text" value="ずんだもんなのだ">
   <p style="margin:.75rem 0 0">
-    <button id="go">合成する</button>
-    <span style="color:#888; font-size:.85rem; margin-left:.5rem">
-      初回はセッション構築に十数分かかります。合成そのものは数十秒です。
-    </span>
+    <button id="go">喋らせる</button>
+    <button id="again" disabled>もう一度（別の言葉で）</button>
   </p>
   <progress id="bar" value="0" max="1" hidden></progress>
 </fieldset>
+
+<details style="margin-bottom:1.25rem">
+  <summary style="cursor:pointer;color:#888;font-size:.9rem">
+    セッションを持たずに、その場で構築して一度だけ喋らせる
+  </summary>
+  <p style="margin:.75rem 0 0">
+    <button id="once">構築して喋らせる</button>
+    <span style="color:#888; font-size:.85rem; margin-left:.5rem">
+      十数分かかり、保存はされません
+    </span>
+  </p>
+</details>
 
 <div id="status"></div>
 <div id="result"></div>
@@ -80,19 +109,55 @@ const $ = (id) => document.getElementById(id);
 const log = (text) => { $('log').hidden = false; $('log').textContent += text;
                         $('log').scrollTop = $('log').scrollHeight; };
 
+const BUTTONS = ['build', 'go', 'again', 'once'];
 let worker = null;
+// The worker keeps the session it last loaded, so a second phrase does not
+// re-read 166 MB.  This says whether there is one to keep.
+let loaded = false;
 
-$('go').addEventListener('click', () => {
-    const files = [...$('libs').files];
-    if (files.length === 0) {
-        $('status').textContent = '先に CUDA ビルドの3ファイルを選んでください。';
-        return;
-    }
-    $('go').disabled = true;
-    $('result').textContent = '';
-    $('bar').hidden = false;
+function busy(on) {
+    for (const id of BUTTONS) $(id).disabled = on;
+    if (!on) $('again').disabled = !loaded;
+    $('bar').hidden = !on;
+}
 
+// The worker hands over a Blob, not bytes: at this point the WebAssembly heap
+// is near a gigabyte and MEMFS is holding the state as well, so a third copy of
+// 166 MB is the one that would not fit.
+function download(name, blob) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+function stats(m) {
+    return '<table><tr><td>全体</td><td>' + m.seconds.toFixed(1) + ' 秒</td></tr>' +
+           '<tr><td>エミュレートした命令</td><td>' +
+           (m.instructions / 1e6).toFixed(1) + ' M</td></tr>' +
+           '<tr><td>毎秒</td><td>' +
+           (m.instructions / m.seconds / 1e6).toFixed(1) + ' M</td></tr>' +
+           '<tr><td>WebAssembly ヒープ</td><td>' +
+           (m.heap / 1048576).toFixed(0) + ' MB</td></tr></table>';
+}
+
+// One worker for the page, not one per press: the emulator's module, the
+// libraries and the 103 MB dictionary are staged into it once, and a second
+// phrase should not pay for that again.
+function ensureWorker() {
+    if (worker) return worker;
     worker = new Worker('cuda_worker.js');
+    // A worker that dies rather than throws - running out of memory is the way
+    // that happens here - posts nothing, and without this the buttons stay
+    // disabled and the page says nothing at all.
+    worker.onerror = (e) => {
+        $('status').innerHTML = '<span class="warn">ワーカーが停止しました: ' +
+            (e.message || 'メモリ不足の可能性があります') + '</span>';
+        worker = null;
+        loaded = false;
+        busy(false);
+    };
     worker.onmessage = (e) => {
         const m = e.data;
         if (m.type === 'status') $('status').textContent = m.text;
@@ -100,27 +165,78 @@ $('go').addEventListener('click', () => {
         else if (m.type === 'progress') { $('bar').max = m.total; $('bar').value = m.done; }
         else if (m.type === 'error') {
             $('status').innerHTML = '<span class="warn">失敗: ' + m.text + '</span>';
-            $('go').disabled = false;
-            $('bar').hidden = true;
+            busy(false);
+        } else if (m.type === 'state') {
+            download('session.state', m.session);
+            download('session.state.shim', m.shim);
+            loaded = true;
+            $('status').textContent =
+                'セッションを保存しました。次からはこの2ファイルを選べば構築は要りません。';
+            $('result').innerHTML = stats(m) +
+                '<p style="font-size:.85rem;color:#888">' +
+                'このまま下の「もう一度」でも喋らせられます。</p>';
+            busy(false);
         } else if (m.type === 'wav') {
             const url = URL.createObjectURL(new Blob([m.wav], { type: 'audio/wav' }));
             $('status').textContent = 'できました。';
-            $('bar').hidden = true;
             $('result').innerHTML =
-                '<audio controls src="' + url + '"></audio>' +
-                '<table><tr><td>全体</td><td>' + m.seconds.toFixed(1) + ' 秒</td></tr>' +
-                '<tr><td>エミュレートした命令</td><td>' +
-                (m.instructions / 1e9).toFixed(2) + ' G</td></tr>' +
-                '<tr><td>毎秒</td><td>' +
-                (m.instructions / m.seconds / 1e6).toFixed(1) + ' M</td></tr>' +
-                '<tr><td>WebAssembly ヒープ</td><td>' +
-                (m.heap / 1048576).toFixed(0) + ' MB</td></tr></table>' +
+                '<audio controls autoplay src="' + url + '"></audio>' + stats(m) +
                 '<p style="font-size:.85rem;color:#888">' +
                 'この音声は、Tesla T4 が同じ入力から出したものと 12988 中 8 まで一致します。</p>';
-            $('go').disabled = false;
+            busy(false);
         }
     };
-    worker.postMessage({ type: 'speak', text: $('text').value, files });
+    return worker;
+}
+
+function libs() {
+    const files = [...$('libs').files];
+    if (files.length === 0) {
+        $('status').textContent = '先に CUDA ビルドの3ファイルを選んでください。';
+        return null;
+    }
+    return files;
+}
+
+$('build').addEventListener('click', () => {
+    const files = libs();
+    if (!files) return;
+    busy(true);
+    $('result').textContent = '';
+    ensureWorker().postMessage({ type: 'build', files });
+});
+
+$('go').addEventListener('click', async () => {
+    const files = libs();
+    if (!files) return;
+    const chosen = [...$('state').files];
+    const session = chosen.find((f) => !/\.shim$/.test(f.name));
+    const shim = chosen.find((f) => /\.shim$/.test(f.name));
+    if (!session || !shim) {
+        $('status').textContent = 'セッションの2ファイル（.state と .state.shim）を選んでください。';
+        return;
+    }
+    busy(true);
+    $('result').textContent = '';
+    const a = await session.arrayBuffer();
+    const b = await shim.arrayBuffer();
+    loaded = true;
+    ensureWorker().postMessage(
+        { type: 'resume', text: $('text').value, files, session: a, shim: b }, [a, b]);
+});
+
+$('again').addEventListener('click', () => {
+    busy(true);
+    $('result').textContent = '';
+    ensureWorker().postMessage({ type: 'again', text: $('text').value });
+});
+
+$('once').addEventListener('click', () => {
+    const files = libs();
+    if (!files) return;
+    busy(true);
+    $('result').textContent = '';
+    ensureWorker().postMessage({ type: 'speak', text: $('text').value, files });
 });
 </script>
 </html>

@@ -58,6 +58,17 @@ std::string g_error;
 uint64_t g_instructions = 0;
 std::string g_format;
 
+// What the *guest* will find in its environment, as opposed to what this
+// process has in its own.  Two different things, and mistaking one for the
+// other is why a snapshot the guest was asked for never happened: emu_setenv
+// goes to the C library here, which is what the emulator and the shim read for
+// their diagnostics, and a guest cannot see any of it.
+//
+// A Linux guest is given only PATH unless it is told otherwise - deliberately,
+// so that a host's variables do not reach it - so anything it is meant to read
+// has to be said here.
+std::vector<std::pair<std::string, std::string>> g_guest_env;
+
 x86emu::Emulator::Options make_options(int trace_calls, double max_insns) {
     x86emu::Emulator::Options opt;
     opt.trace_calls = trace_calls != 0;
@@ -175,6 +186,12 @@ int emu_resume_path(const char* path, const char* argv_data, int argv_len,
 
     std::vector<std::string> argv = split_argv(argv_data, argv_len);
     if (argv.empty()) argv.emplace_back(path);
+    if (!g_guest_env.empty()) {
+        std::vector<std::pair<std::string, std::string>> env;
+        env.emplace_back("PATH", "/usr/local/bin:/usr/bin:/bin");
+        for (const auto& kv : g_guest_env) env.push_back(kv);
+        emu.set_environment(std::move(env));  // before load(), which builds the stack
+    }
     try {
         emu.load(path, argv);
     } catch (const std::exception& err) {
@@ -212,6 +229,21 @@ void emu_set_sysroot(const char* dir) {
 // looks exactly like "nothing to report".
 void emu_setenv(const char* name, const char* value) {
     if (name && *name) setenv(name, value ? value : "", 1);
+}
+
+// Sets a variable the *guest* will see, which emu_setenv does not.  Call before
+// running; an empty value removes it.  This is the WebAssembly spelling of
+// vvcudaemu's --env, and what a guest that takes its instructions from the
+// environment - VVSNAPSHOT, say - actually reads.
+void emu_guest_setenv(const char* name, const char* value) {
+    if (!name || !*name) return;
+    for (size_t i = 0; i < g_guest_env.size(); i++) {
+        if (g_guest_env[i].first != name) continue;
+        if (value && *value) g_guest_env[i].second = value;
+        else g_guest_env.erase(g_guest_env.begin() + static_cast<long>(i));
+        return;
+    }
+    if (value && *value) g_guest_env.emplace_back(name, value);
 }
 
 const char* emu_error() { return g_error.c_str(); }
