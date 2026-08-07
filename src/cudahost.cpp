@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <map>
 #include <string>
 #include <vector>
@@ -22,14 +23,13 @@
 #include <sys/mman.h>
 #endif
 
+#include "cudastub.h"
 #include "emulator.h"
+#define VVHOSTCALL_HOST_SIDE 1
 #include "vvhostcall.h"
 
 // The compute side, which knows nothing about any of this.
 extern "C" {
-int vvstub_run_kernel(const char* name, void** args);
-int vvstub_kernel_nargs(const char* name);
-
 int cudnnCreateTensorDescriptor(void** d);
 int cudnnDestroyTensorDescriptor(void* d);
 int cudnnSetTensorNdDescriptor(void* d, int type, int nb, const int* dim,
@@ -70,8 +70,24 @@ int cublasSgeam(void* h, int transa, int transb, int m, int n, const float* alph
 int vvstub_trace = 0;
 int vvstub_timing = 0;
 void vvstub_note(const char* name) { std::fprintf(stderr, "[cuda] %s\n", name); }
-double vvstub_now(void) { return 0.0; }
-void vvstub_account(int bucket, double started) { (void)bucket; (void)started; }
+
+double vvstub_now(void) {
+    struct timespec t;
+    timespec_get(&t, TIME_UTC);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
+
+// VVSTUB_TIME=1: how the shim's own seconds divide, and - the number that
+// matters now - how much of a run is spent on this side of the boundary at all.
+// Whatever is left is the guest still being interpreted.
+double vvhost_seconds[VVSTUB_T_COUNT + 1];
+long long vvhost_calls[VVSTUB_T_COUNT + 1];
+
+void vvstub_account(int bucket, double started) {
+    if (bucket < 0 || bucket > VVSTUB_T_COUNT) return;
+    vvhost_seconds[bucket] += vvstub_now() - started;
+    vvhost_calls[bucket]++;
+}
 }
 
 namespace {
@@ -217,6 +233,12 @@ int64_t do_memcpy(x86emu::Emulator& e, uint64_t dst, uint64_t src, uint64_t n) {
 }
 
 int64_t do_launch(x86emu::Emulator& e, uint64_t name_addr, uint64_t args_addr) {
+    double t0 = vvstub_timing ? vvstub_now() : 0;
+    struct Account {
+        double t;
+        ~Account() { if (vvstub_timing) vvstub_account(VVSTUB_T_KERNEL, t); }
+    } account{t0};
+
     std::string name = e.mem.read_cstring(name_addr);
     int nargs = vvstub_kernel_nargs(name.c_str());
     if (nargs <= 0) return 0;  // not one this build knows
@@ -236,11 +258,34 @@ int64_t do_launch(x86emu::Emulator& e, uint64_t name_addr, uint64_t args_addr) {
     return vvstub_run_kernel(name.c_str(), host_args.data()) ? 1 : 0;
 }
 
+// The whole boundary, timed as one bucket.  What a run costs beyond this is
+// the guest, still interpreted - and on this workload that is now the larger
+// half, which was not true before.
+constexpr int kBoundaryBucket = VVSTUB_T_COUNT;
+
+struct Report {
+    ~Report() {
+        if (!vvstub_timing) return;
+        static const char* names[] = {"kernels", "cuDNN", "cuBLAS", "boundary"};
+        for (int i = 0; i <= VVSTUB_T_COUNT; i++)
+            std::fprintf(stderr, "[host] %-9s %8.3f s  %lld calls\n", names[i],
+                         vvhost_seconds[i], vvhost_calls[i]);
+        std::fprintf(stderr,
+                     "[host] the rest of the run is the guest, interpreted\n");
+    }
+} report_at_exit;
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
 
 int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
+    double t_entry = vvstub_timing ? vvstub_now() : 0;
+    struct Account {
+        double t;
+        ~Account() { if (vvstub_timing) vvstub_account(kBoundaryBucket, t); }
+    } account{t_entry};
+
     uint64_t a[VVHOST_SLOTS];
     for (int i = 0; i < VVHOST_SLOTS; i++) a[i] = e.mem.read64(argp + 8u * i);
 

@@ -21,6 +21,7 @@
 #include "emulator.h"
 
 int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t args);
+extern "C" int vvstub_timing;
 
 int main(int argc, char** argv) {
     x86emu::Emulator::Options opt;
@@ -57,6 +58,7 @@ int main(int argc, char** argv) {
 
     x86emu::Emulator emu(opt);
     emu.on_host_call = vv_host_call;
+    if (const char* t = std::getenv("VVSTUB_TIME")) vvstub_timing = *t && *t != '0';
 
     try {
         emu.load(program, guest_args);

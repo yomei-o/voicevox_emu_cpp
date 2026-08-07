@@ -42,6 +42,10 @@ void vvstub_account(int bucket, double started);
 // Implemented in cudakernels.c: does the kernel natively when it knows how,
 // and answers 0 when it does not.
 int vvstub_run_kernel(const char* name, void** args);
+// How many arguments it takes, or 0 for one this build does not know.  A
+// caller that has to marshal them across a boundary needs the count, and
+// `cudaLaunchKernel` does not carry one.
+int vvstub_kernel_nargs(const char* name);
 
 #ifdef __cplusplus
 }

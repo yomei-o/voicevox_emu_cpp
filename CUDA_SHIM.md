@@ -192,7 +192,7 @@ exactly as the measurement said, and filling them in produces the T4's audio to
 within 2 samples of 12988. The rest is descriptor plumbing and stubs that return
 success.
 
-Two of the three open questions are now answered.
+All three open questions are now answered.
 
 1. **Are the shapes right?** *Yes.* This was a real worry: with cuBLAS and cuDNN
    returning success without computing, the values were noise, and noise can take
@@ -212,23 +212,71 @@ Two of the three open questions are now answered.
    AVX across every core, and this is im2col plus scalar C loops. A tenth of the
    speed for a thousandth of the code is the trade that was made on purpose.
 
-   The comparison that matters is the other one. Synthesis *inside the emulator*
-   takes hours; this moves all of the arithmetic out of it for ten seconds of
-   native work. That is the win the whole design was for — but see the next
-   point, because it has not been measured yet.
+   The comparison that matters is the other one, and it is the next section:
+   synthesis *inside the emulator* takes hours, and moving the arithmetic out of
+   it makes that seconds.
 
-3. **Does it run under the emulator?** *Still unknown, and this is now the only
-   thing left.* Everything above was measured natively on Linux, which was the
-   right way round: the runtime behaves the same either way and iteration is
-   seconds instead of minutes. The emulator needs one new thing — hooking an ELF
-   guest's imports. `Emulator::dispatch_hook` is address-based and already
-   exists; wiring it to a PLT is new work. And 377 launches is 377 round trips
-   across the emulator's memory, which is the part that could still spoil it.
+3. **Does it run under the emulator?** *Yes* — see below. It did not need the
+   PLT hooking this document expected, and the 377 round trips that looked like
+   they might spoil it cost 60 milliseconds between them.
+
+## It runs under the emulator, and synthesis takes seconds
+
+This was the last open question and it is answered. `tools/wslrun_cuda.sh` runs
+the CUDA build inside `vvcudaemu` — x86emu with the shim behind a reserved
+syscall — on a machine with no GPU:
+
+```
+      is_gpu_mode = true
+ok    load_voice_model
+      tts took 7.000 s          "ずんだもんなのだ", 1.45 s of audio
+      377 launches, all handled
+      within 8 of 12988 of the Tesla T4
+```
+
+The same utterance through the CPU build, interpreted, is **hours**.
+
+### Why it costs nothing to move the tensors
+
+A CUDA device pointer is not host memory. Nothing in ONNX Runtime ever
+dereferences one — it cannot, that is what "device" means — so device memory
+does not have to live in the guest's address space either. `cudaMalloc` returns
+a real host pointer, from an arena at an address no guest pointer can be
+mistaken for, and the guest passes it back and forth as an opaque number.
+
+So the tensors never cross. What crosses is small and rare: kernel argument
+blocks, descriptor dimensions, alpha and beta. Measured over a whole utterance:
+
+| | |
+| --- | --- |
+| synthesis | 7.0 s |
+| — inside the shim | 6.81 s |
+| — — cuDNN, 194 calls | 5.34 s |
+| — — the kernels, 377 launches | 1.41 s |
+| — — cuBLAS, 43 calls | 0.004 s |
+| — — **marshalling, 1983 crossings** | **0.06 s** |
+| — the guest, still interpreted | ~0.2 s |
+
+Sixty milliseconds for every crossing in the run. The boundary is free; the
+design was right about that.
+
+### What is left, and it is not the arithmetic
+
+Building the sessions — decrypting the model and constructing every graph —
+takes **6 minutes 37 seconds**, all of it interpreted, against about a second
+natively. That is now the whole cost of a run, and none of it is arithmetic:
+it is ONNX Runtime's graph construction and VOICEVOX's decryption, which the
+shim does not touch and should not.
+
+So the shape of the problem has inverted. It used to be "the vocoder takes
+hours". It is now "the vocoder takes seconds and the setup takes minutes",
+which is a different job — a JIT, or caching a built session, rather than
+anything to do with CUDA.
 
 ## Could this make the browser demo bearable?
 
-That is the question the whole exercise is really for, and three of the four
-things it turns on are now measured.
+The question the whole exercise is for. All four of the things it turns on are
+now measured.
 
 **How much of the work is arithmetic? Nearly all of it.** The CUDA provider
 hands every bit of its arithmetic across this boundary, so timing the shim
@@ -254,19 +302,20 @@ still launches 377, and still makes audio within 2 of 12988 of the T4:
 
     440 MB  ->  9.3 MB gzipped
 
-**Does it fit in a tab? Not yet.** `Memory::map` allocates every page of a
-segment up front and the loader then writes the whole segment, so those 419 MB
-of zeros still cost 419 MB of guest pages. Lazy pages — record the range,
-allocate on first touch — would fix it, and would help every other large
-mapping too. That is a bounded change to the emulator core.
+**Would it be fast? On the desktop, yes — measured, not estimated.** Synthesis
+is 7 seconds under the emulator where the interpreted path is hours. In a
+browser the arithmetic would be compiled WebAssembly rather than native, so call
+it two to three times that; the setup is the part that does not improve, and at
+the browser's ~6 M instructions a second the 6m37s measured here is worse
+again. So: **minutes, dominated by session building, with the synthesis itself
+no longer the problem.** That is a different demo from the one that costs
+hours, and a different remaining job — one about graph construction, not CUDA.
 
-**Would it be fast? Unknown, and this is the honest part.** The arithmetic would
-run as compiled WebAssembly rather than interpreted x86, which is the whole
-point. But the 1.27 s of setup stays emulated, and at the browser's ~6 M
-instructions a second that is minutes, not seconds. So the shape of the answer
-is: **from about 100 minutes to something on the order of a few** — an enormous
-improvement and still not instant. The error bar on that stays wide until the
-PLT hooking exists and it can be *measured* instead of estimated.
+**Does it fit in a tab?** Still the open one. `Memory::map` allocates every page
+of a segment up front and the loader writes the whole segment, so the provider's
+419 MB of zeros still cost 419 MB of guest pages. Lazy pages — record the range,
+allocate on first touch — would fix it, and would help every other large mapping
+too. On a desktop it simply works; a tab is where it would not.
 
 And one more thing to weigh against it: the shim is competitive per core but it
 is single-threaded, where MLAS is not. Same utterance, this machine, eight
