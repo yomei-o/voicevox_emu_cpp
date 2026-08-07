@@ -46,6 +46,16 @@ int vvstub_run_kernel(const char* name, void** args);
 // caller that has to marshal them across a boundary needs the count, and
 // `cudaLaunchKernel` does not carry one.
 int vvstub_kernel_nargs(const char* name);
+// The same, and also which arguments carry device addresses: a bit per index in
+// `ptrs` for an address on its own, and in `arrays` for a TArray of them
+// arriving by value.  A caller that has to convert those addresses must not
+// guess which words are addresses - an element count beside the upper half of a
+// pointer reads as one.
+int vvstub_kernel_layout(const char* name, unsigned* ptrs, unsigned* arrays);
+// How to dereference a device pointer, when it is not already a host one.
+// Unset natively; set by the emulator's host shim, where device memory lives at
+// a guest address.
+void vvstub_set_device_host(void* (*fn)(unsigned long long));
 
 #ifdef __cplusplus
 }

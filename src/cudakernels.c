@@ -64,7 +64,26 @@ typedef struct {
 // concatenating one of them with a null.
 typedef unsigned long long GuestPtr;
 
-static void* guest_ptr(GuestPtr p) { return (void*)(size_t)p; }
+// Turning one into something this process can dereference.
+//
+// Natively a device pointer *is* a host pointer and this is a cast.  Under the
+// emulator device memory lives at a guest address and this translates.
+//
+// Which pointers need it is a sharp line, and getting it wrong translates
+// twice: **an argument slot arrives already translated, and device memory does
+// not.**  The host half copies each argument out of guest memory and converts
+// the device pointers it finds there, so anything reached through `args` is a
+// host pointer by the time a handler sees it.  What it cannot reach is a
+// pointer stored *inside* device memory - a concat's array of inputs, say -
+// because that array is not in the slot, only its address is.  Those come here;
+// nothing else does.
+static void* (*device_host_fn)(GuestPtr);
+
+void vvstub_set_device_host(void* (*fn)(GuestPtr)) { device_host_fn = fn; }
+
+static void* guest_ptr(GuestPtr p) {
+    return device_host_fn ? device_host_fn(p) : (void*)(size_t)p;
+}
 
 typedef struct {
     int size_;
@@ -239,7 +258,15 @@ static void store_i(void* p, ElemType t, long long i, long long v) {
 }
 
 static void report(const char* key) {
-    if (!stats_on || !out_ptr || out_n <= 0) return;
+    if (!stats_on) return;
+    // A kernel that ran over nothing still gets a line.  Staying quiet made two
+    // sequences that could not be lined up: one run's list was shorter than the
+    // other's and it was not clear whether a launch had been skipped or had
+    // simply been handed a count of zero.
+    if (!out_ptr || out_n <= 0) {
+        fprintf(stderr, "[k] %-40s n=%-8lld (nothing to do)\n", key, out_n);
+        return;
+    }
     double lo = 0, hi = 0, sum = 0;
     int finite = 1;
     for (long long i = 0; i < out_n; i++) {
@@ -738,7 +765,10 @@ static int do_concat_same(const char* name, void** args) {
         divmod(concat, block_index, &input_index, &block_offset);
         long long src = (long long)outer_index * concat->d_ * inside->d_ +
                         (long long)block_offset * inside->d_ + offset;
-        const char* in = (const char*)guest_ptr(inputs->data_[input_index]);
+        // Not guest_ptr: this TArray came by value in the argument slot, and
+        // the table marks that slot as an array of addresses, so the caller
+        // converted its elements on the way in.
+        const char* in = (const char*)(size_t)inputs->data_[input_index];
         memcpy(out + (long long)id * w, in + src * w, (size_t)w);
     }
     NOTE_OUT(out, t, n);
@@ -765,7 +795,8 @@ static int do_split_same(const char* name, void** args) {
         divmod(split, block_index, &output_index, &block_offset);
         long long dst = (long long)outer_index * split->d_ * inside->d_ +
                         (long long)block_offset * inside->d_ + offset;
-        char* o = (char*)guest_ptr(outputs->data_[output_index]);
+        // By value in the slot, so already converted - see do_concat_same.
+        char* o = (char*)(size_t)outputs->data_[output_index];
         memcpy(o + dst * w, in + (long long)id * w, (size_t)w);
     }
     return 1;
@@ -972,48 +1003,91 @@ static int do_softmax(const char* name, void** args) {
 
 typedef int (*Handler)(const char* name, void** args);
 
+// `ptrs` marks the arguments that are a device address on their own, and
+// `arrays` the ones that are a TArray of them arriving by value.  A caller that
+// has to convert those addresses - the emulator's host shim does - needs to know
+// which words are addresses and which are counts, and the signature is the only
+// thing that knows.  Searching the argument block for values that look like
+// addresses is not the same question and gets a different answer: an element
+// count sitting next to the upper half of a device pointer reads, as one 64-bit
+// word, as a device pointer into the very start of the arena.  That is not a
+// remote coincidence but the ordinary layout of an argument block, and it cost
+// a night.
+#define P(i) (1u << (i))
+
 static const struct {
     const char* key;
     int nargs;
+    unsigned ptrs;
+    unsigned arrays;
     Handler fn;
 } kKernels[] = {
-    {"_UnaryElementWiseI", 4, do_unary},
-    {"_BinaryElementWiseSimpleI", 5, do_binary_simple},
-    {"_BinaryElementWiseRhsPerChannelBatch1I", 6, do_binary_rhs_batch1},
-    {"_BinaryElementWiseRhsPerChannelBatchNI", 7, do_binary_rhs_batchn},
-    {"_BinaryElementWiseI", 9, do_binary_general},
-    {"_TenaryElementWiseI", 10, do_tenary},
+    // void _UnaryElementWise<T, T1, OP>(const T*, T1*, OP, int)
+    {"_UnaryElementWiseI", 4, P(0)|P(1), 0, do_unary},
+    // void _BinaryElementWiseSimple<..>(const T2*, const T3*, T1*, OP, int)
+    {"_BinaryElementWiseSimpleI", 5, P(0)|P(1)|P(2), 0, do_binary_simple},
+    // ..(const T1*, const T2*, DivMod, T*, OP, int)
+    {"_BinaryElementWiseRhsPerChannelBatch1I", 6, P(0)|P(1)|P(3), 0, do_binary_rhs_batch1},
+    // ..(const T1*, const T2*, DivMod, DivMod, T*, OP, int)
+    {"_BinaryElementWiseRhsPerChannelBatchNI", 7, P(0)|P(1)|P(4), 0, do_binary_rhs_batchn},
+    // ..(int, TArray<long>, const T1*, TArray<long>, const T2*,
+    //    TArray<DivMod>, T*, const OP&, int) - the functor is a reference, so
+    //    an address, even though nothing here follows it.
+    {"_BinaryElementWiseI", 9, P(2)|P(4)|P(6)|P(7), 0, do_binary_general},
+    {"_TenaryElementWiseI", 10, P(2)|P(4)|P(6)|P(8), 0, do_tenary},
     // void ExpandKernel2D<T>(int, const T*, T*, DivMod, int, int)
-    {"ExpandKernel2DI", 6, do_expand2d},
-    {"ExpandKernelI", 6, do_expand},
+    {"ExpandKernel2DI", 6, P(1)|P(2), 0, do_expand2d},
+    // void ExpandKernel<T>(int, int, const T*, T*, TArray, TArray)
+    {"ExpandKernelI", 6, P(2)|P(3), 0, do_expand},
     // void _GatherKernel<T>(long, long, DivMod, DivMod, const void*,
     //                       unsigned long, const T*, T*, int)
-    {"_GatherKernelI", 9, do_gather},
-    {"_ConcatKernelSameConcatDimI", 6, do_concat_same},
+    {"_GatherKernelI", 9, P(4)|P(6)|P(7), 0, do_gather},
+    // void _ConcatKernelSameConcatDim<T>(DivMod, DivMod, DivMod, T*,
+    //                                    TArray<const void*, 32>, int)
+    {"_ConcatKernelSameConcatDimI", 6, P(3), P(4), do_concat_same},
     // void _ConcatKernel<T>(DivMod, DivMod, const long*, const long*,
     //                       const long*, T*, const void**, int)
-    {"_ConcatKernelI", 8, do_concat},
-    {"_SplitKernelSameSplitDimI", 7, do_split_same},
-    {"_SliceKernelI", 7, do_slice},
-    {"TransposeKernelI", 6, do_transpose},
-    {"_ScatterNDKernelI", 7, do_scatter_nd},
-    {"_FillFromDataPtrKernelI", 3, do_fill_from_ptr},
-    {"_FillI", 3, do_fill},
-    {"RangeKernelI", 4, do_range},
-    {"reduce_matrix_columns_kernelI", 6, do_reduce_columns},
-    {"softmax_warp_forwardI", 5, do_softmax},
+    {"_ConcatKernelI", 8, P(2)|P(3)|P(4)|P(5)|P(6), 0, do_concat},
+    {"_SplitKernelSameSplitDimI", 7, P(4), P(5), do_split_same},
+    {"_SliceKernelI", 7, P(4)|P(5), 0, do_slice},
+    // void TransposeKernel<T>(int, TArray<long>, const T*, TArray<DivMod>,
+    //                         T*, int)
+    {"TransposeKernelI", 6, P(2)|P(4), 0, do_transpose},
+    // void _ScatterNDKernel<T>(T*, unsigned long, const long*, long,
+    //                          const long*, const T*, unsigned long)
+    {"_ScatterNDKernelI", 7, P(0)|P(2)|P(4)|P(5), 0, do_scatter_nd},
+    {"_FillFromDataPtrKernelI", 3, P(0)|P(1), 0, do_fill_from_ptr},
+    {"_FillI", 3, P(0), 0, do_fill},
+    // void RangeKernel<T>(T start, T delta, int, T*)
+    {"RangeKernelI", 4, P(3), 0, do_range},
+    // void reduce_matrix_columns_kernel<..>(int, int, const T*, T0*, T1*, int*)
+    {"reduce_matrix_columns_kernelI", 6, P(2)|P(3)|P(4)|P(5), 0, do_reduce_columns},
+    {"softmax_warp_forwardI", 5, P(0)|P(1), 0, do_softmax},
 };
 
-// How many arguments a kernel takes, or 0 for one this build does not know.
+#undef P
+
+// How many arguments a kernel takes, or 0 for one this build does not know,
+// and which of them carry device addresses.
 //
 // `cudaLaunchKernel` is handed a `void**` with no count, so a caller that has
-// to marshal the arguments across a boundary - the emulator's host shim does -
-// has no way to know where the array ends.  The count comes from the signature,
-// which is what the table already records.
-int vvstub_kernel_nargs(const char* name) {
-    for (size_t i = 0; i < sizeof kKernels / sizeof kKernels[0]; i++)
-        if (strstr(name, kKernels[i].key)) return kKernels[i].nargs;
+// to marshal the arguments across a boundary has no way to know where the array
+// ends, nor which entries need converting.  Both come from the signature, which
+// is what the table records.
+int vvstub_kernel_layout(const char* name, unsigned* ptrs, unsigned* arrays) {
+    for (size_t i = 0; i < sizeof kKernels / sizeof kKernels[0]; i++) {
+        if (!strstr(name, kKernels[i].key)) continue;
+        if (ptrs) *ptrs = kKernels[i].ptrs;
+        if (arrays) *arrays = kKernels[i].arrays;
+        return kKernels[i].nargs;
+    }
+    if (ptrs) *ptrs = 0;
+    if (arrays) *arrays = 0;
     return 0;
+}
+
+int vvstub_kernel_nargs(const char* name) {
+    return vvstub_kernel_layout(name, 0, 0);
 }
 
 // Returns 1 when the launch was handled, 0 when nothing here knows it yet.
@@ -1028,7 +1102,7 @@ int vvstub_run_kernel(const char* name, void** args) {
     }
     for (size_t i = 0; i < sizeof kKernels / sizeof kKernels[0]; i++) {
         if (!strstr(name, kKernels[i].key)) continue;
-        dump(kKernels[i].key, args, kKernels[i].nargs);
+        dump(name, args, kKernels[i].nargs);
         out_ptr = NULL;
         int handled = kKernels[i].fn(name, args);
         if (handled) report(kKernels[i].key);

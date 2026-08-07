@@ -94,53 +94,51 @@ void vvstub_account(int bucket, double started) {
 namespace {
 
 // ---------------------------------------------------------------------------
-// Device memory
+// Device memory, in the guest's address space
 //
-// One arena, at an address no guest pointer can be mistaken for.  That matters:
-// a guest address and a host address are both just 64-bit numbers, and the
-// emulator's guest layout (0x5555..., 0x7fff...) is exactly where Linux puts a
-// real heap.  Classifying by "is it inside my arena" is unambiguous where
-// classifying by "did I allocate it" would not be - ONNX Runtime sub-allocates
-// inside a cudaMalloc'd block, so the pointers it passes back are rarely the
-// ones it was given.
+// A CUDA device pointer is never dereferenced by ONNX Runtime - it cannot be,
+// that is what "device" means - so it was tempting to make one a *host* pointer
+// and skip the guest's address space entirely.  That worked, and cost two
+// things that only showed up later:
+//
+//   a 32-bit host indexing an array of guest pointers strides by four, so the
+//   second element is the top half of the first;
+//
+//   and a saved session cannot be carried between hosts, because host
+//   addresses are baked into guest memory and nothing can find them again to
+//   rewrite them.
+//
+// So the arena lives at a guest address, backed by one contiguous host
+// allocation (Memory::map_contiguous).  Everything the guest holds is a guest
+// address; the shim turns one into a host pointer with a subtraction; and the
+// tensors still never move, which was the point of the host arena in the first
+// place.
 
 constexpr uint64_t kArenaBase = 0x0000'3000'0000'0000ull;
 
-uint8_t* arena_start;
 uint64_t arena_used;
 uint64_t arena_size;
+uint8_t* arena_host;          // where map_contiguous put it
+
 // Freed blocks, by size, for reuse: ONNX Runtime's own arena allocates a few
 // large blocks and recycles them, so best fit here is nearly always exact.
 std::multimap<uint64_t, uint64_t> arena_free;  // size -> offset
+std::map<uint64_t, uint64_t> live_blocks;      // offset -> size
 
-bool arena_init() {
-    if (arena_start) return true;
-#if SIZE_MAX <= 0xFFFFFFFFu
-    // A 32-bit host - WebAssembly - has one linear memory and no address space
-    // to reserve, so the arena is an ordinary allocation and has to be a size
-    // that can actually be committed.  The other reason for the 64-bit version,
-    // putting it where no guest pointer could be mistaken for it, does not
-    // apply either: a guest address here is a synthetic value above
-    // 0x5555'5555'4000 and a 32-bit host pointer cannot reach it.
-    //
-    // 512 MB against the 69 MB the sessions actually take, because the
-    // activations are on top of that and running out is a hard failure.
+bool arena_init(x86emu::Emulator& e) {
+    if (arena_size) return arena_host != nullptr;
+    // Big enough for the weights and the activations: the sessions themselves
+    // take 69 MB, and running out is a hard failure rather than a slow one.
+    // VVARENA overrides, in megabytes.
     arena_size = 512ull << 20;
-    arena_start = static_cast<uint8_t*>(std::malloc(static_cast<size_t>(arena_size)));
-#elif defined(_WIN32)
-    arena_size = 4ull << 30;  // reserved, not committed
-    arena_start = static_cast<uint8_t*>(
-        VirtualAlloc(reinterpret_cast<void*>(kArenaBase), static_cast<SIZE_T>(arena_size),
-                     MEM_RESERVE, PAGE_READWRITE));
-#else
-    arena_size = 4ull << 30;  // reserved, not committed
-    void* p = mmap(reinterpret_cast<void*>(kArenaBase), static_cast<size_t>(arena_size),
-                   PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
-                   -1, 0);
-    arena_start = (p == MAP_FAILED) ? nullptr : static_cast<uint8_t*>(p);
-#endif
-    if (!arena_start) {
-        std::fprintf(stderr, "[cuda] cannot reserve %.0f MB for the device arena\n",
+    if (const char* mb = std::getenv("VVARENA")) {
+        unsigned long long want = std::strtoull(mb, nullptr, 10);
+        if (want) arena_size = want << 20;
+    }
+    e.mem.map_contiguous(kArenaBase, arena_size, "cuda device memory");
+    arena_host = e.mem.host_span(kArenaBase, arena_size);
+    if (!arena_host) {
+        std::fprintf(stderr, "[cuda] cannot map %.0f MB of device memory\n",
                      arena_size / 1048576.0);
         arena_size = 0;
         return false;
@@ -149,46 +147,79 @@ bool arena_init() {
 }
 
 bool is_device(uint64_t p) {
-    if (!arena_start || !p) return false;
-    uint64_t base = reinterpret_cast<uint64_t>(arena_start);
-    return p >= base && p < base + arena_size;
+    return arena_size && p >= kArenaBase && p < kArenaBase + arena_size;
 }
 
-uint64_t device_alloc(uint64_t n) {
-    if (!arena_init()) return 0;
+// The host address of a guest device pointer - the one place the two kinds of
+// address meet, and a subtraction.
+uint8_t* device_host(uint64_t p) {
+    return is_device(p) ? arena_host + (p - kArenaBase) : nullptr;
+}
+
+// The same, as whatever the callee wants it to be.  cuBLAS deals in floats and
+// cuDNN in void*, and a cast at every call site reads worse than a name.
+template <typename T>
+T* device_as(uint64_t p) {
+    return reinterpret_cast<T*>(device_host(p));
+}
+
+uint64_t device_alloc(x86emu::Emulator& e, uint64_t n) {
+    if (!arena_init(e)) return 0;
     n = (n + 255) & ~255ull;  // ORT wants its tensors aligned; 256 is generous
     auto it = arena_free.lower_bound(n);
     if (it != arena_free.end() && it->first <= n * 2) {
-        uint64_t off = it->second;
+        // Both fields read before the erase: `it` is not a thing afterwards.
+        uint64_t off = it->second, had = it->first;
         arena_free.erase(it);
-        return reinterpret_cast<uint64_t>(arena_start) + off;
+        live_blocks[off] = had;
+        return kArenaBase + off;
     }
     if (arena_used + n > arena_size) {
         std::fprintf(stderr,
                      "[cuda] the device arena is full: %.0f MB used, %.0f MB asked "
-                     "for, %.0f MB in all\n",
+                     "for, %.0f MB in all - raise VVARENA\n",
                      arena_used / 1048576.0, n / 1048576.0, arena_size / 1048576.0);
         return 0;
     }
     uint64_t off = arena_used;
     arena_used += n;
-#if defined(_WIN32)
-    if (!VirtualAlloc(arena_start + off, n, MEM_COMMIT, PAGE_READWRITE)) return 0;
-#endif
-    return reinterpret_cast<uint64_t>(arena_start) + off;
+    live_blocks[off] = n;
+    return kArenaBase + off;
 }
-
-// Sizes are remembered so that a freed block can go back on the list.
-std::map<uint64_t, uint64_t> live_blocks;  // offset -> size
 
 void device_free(uint64_t p) {
     if (!is_device(p)) return;
-    uint64_t off = p - reinterpret_cast<uint64_t>(arena_start);
+    uint64_t off = p - kArenaBase;
     auto it = live_blocks.find(off);
     if (it == live_blocks.end()) return;
     arena_free.emplace(it->second, off);
     live_blocks.erase(it);
 }
+
+// ---------------------------------------------------------------------------
+// Descriptor handles
+//
+// A cuDNN descriptor is an opaque handle the guest only ever hands back, so it
+// was a host pointer.  That is the same mistake device memory made: a host
+// address written into the guest's memory cannot survive a change of host, and
+// a saved session is exactly that.  So handles are small integers now, and the
+// host keeps the table.
+
+std::map<uint64_t, void*> descriptors;
+uint64_t next_handle = 1;
+
+uint64_t remember_descriptor(void* d) {
+    if (!d) return 0;
+    descriptors[next_handle] = d;
+    return next_handle++;
+}
+
+void* descriptor(uint64_t handle) {
+    auto it = descriptors.find(handle);
+    return it == descriptors.end() ? nullptr : it->second;
+}
+
+void forget_descriptor(uint64_t handle) { descriptors.erase(handle); }
 
 // ---------------------------------------------------------------------------
 // Reading the small things out of guest memory
@@ -254,21 +285,39 @@ std::vector<int> guest_ints(x86emu::Emulator& e, uint64_t addr, int n) {
 
 // ---------------------------------------------------------------------------
 
+// Both sides are guest addresses now, so this could go through e.mem.read and
+// e.mem.write throughout and be correct.  It does not, because device memory is
+// contiguous and a memcpy over it is one call where the page-walking path is
+// one per 4 KiB - and cudaMemcpy is how a hundred megabytes of weights arrive.
 int64_t do_memcpy(x86emu::Emulator& e, uint64_t dst, uint64_t src, uint64_t n) {
     if (!n) return 0;
-    bool dd = is_device(dst), sd = is_device(src);
-    if (dd && sd) {
-        std::memcpy(reinterpret_cast<void*>(dst), reinterpret_cast<const void*>(src), n);
-    } else if (dd) {
-        e.mem.read(src, reinterpret_cast<void*>(dst), n);      // guest -> device
-    } else if (sd) {
-        e.mem.write(dst, reinterpret_cast<const void*>(src), n);  // device -> guest
+    uint8_t* d = device_host(dst);
+    const uint8_t* s = device_host(src);
+    if (d && s) {
+        std::memcpy(d, s, n);
+    } else if (d) {
+        e.mem.read(src, d, n);       // guest -> device
+    } else if (s) {
+        e.mem.write(dst, s, n);      // device -> guest
     } else {
         std::vector<uint8_t> tmp(n);
         e.mem.read(src, tmp.data(), n);
         e.mem.write(dst, tmp.data(), n);
     }
     return 0;
+}
+
+// One device address in the copied argument block, converted in place.  A word
+// that is not one is left alone, which covers a null and an argument the guest
+// never filled in.
+void translate(uint8_t* at, uint64_t avail) {
+    if (avail < 8) return;
+    uint64_t word;
+    std::memcpy(&word, at, sizeof word);
+    if (!is_device(word)) return;
+    uint8_t* host = device_host(word);
+    std::memcpy(at, &host, sizeof host);
+    if (sizeof host < 8) std::memset(at + sizeof host, 0, 8 - sizeof host);
 }
 
 int64_t do_launch(x86emu::Emulator& e, uint64_t name_addr, uint64_t args_addr) {
@@ -279,7 +328,8 @@ int64_t do_launch(x86emu::Emulator& e, uint64_t name_addr, uint64_t args_addr) {
     } account{t0};
 
     std::string name = e.mem.read_cstring(name_addr);
-    int nargs = vvstub_kernel_nargs(name.c_str());
+    unsigned ptrs = 0, arrays = 0;
+    int nargs = vvstub_kernel_layout(name.c_str(), &ptrs, &arrays);
     if (nargs <= 0) return 0;  // not one this build knows
 
     // Each slot is a guest pointer to the argument's value.  The values come
@@ -291,7 +341,32 @@ int64_t do_launch(x86emu::Emulator& e, uint64_t name_addr, uint64_t args_addr) {
     for (int i = 0; i < nargs; i++) {
         uint64_t p = e.mem.read64(args_addr + 8u * i);
         uint8_t* slot = storage.data() + static_cast<size_t>(i) * kMaxArg;
-        if (p) guest_read_tolerant(e, p, slot, kMaxArg);
+        uint64_t got = p ? guest_read_tolerant(e, p, slot, kMaxArg) : 0;
+
+        // An argument that is a device pointer is a *guest* address, and the
+        // kernels dereference what they are given - so it is translated here.
+        //
+        // Only where the signature says there is one.  Searching the block for
+        // words that look like addresses is a different question with a
+        // different answer: arguments are packed, an eight-byte read starting
+        // at a four-byte element count takes the upper half of whatever follows
+        // it, and when that is a device pointer the pair reads as an address
+        // 0x3000'0000'0000 plus the count - which is inside the arena.  It
+        // converted the count into a pointer, and 13568 elements became a loop
+        // of 1.5 billion.
+        if (ptrs >> i & 1u) translate(slot, got);
+        if (arrays >> i & 1u) {
+            // TArray<const void*, 32>: a count, then the addresses at offset 8.
+            int32_t count = 0;
+            if (got >= 4) std::memcpy(&count, slot, sizeof count);
+            if (count < 0) count = 0;
+            if (count > 32) count = 32;
+            for (int k = 0; k < count; k++) {
+                uint64_t off = 8 + 8 * static_cast<uint64_t>(k);
+                if (off + 8 > got) break;
+                translate(slot + off, got - off);
+            }
+        }
         host_args[static_cast<size_t>(i)] = slot;
     }
     return vvstub_run_kernel(name.c_str(), host_args.data()) ? 1 : 0;
@@ -398,11 +473,11 @@ int64_t write_snapshot(x86emu::Emulator& e, const std::string& path) {
         std::fprintf(stderr, "[snap]   %8.1f MB  %s\n",
                      ranked[i].first * kPage / 1048576.0, ranked[i].second.c_str());
 
-    // The arena, up to the high-water mark.  Its address is fixed, so a resume
-    // can put it back where the guest's pointers expect it.
-    uint64_t arena_bytes = arena_start ? arena_used : 0;
-    std::fwrite(&arena_bytes, sizeof arena_bytes, 1, f);
-    if (arena_bytes) std::fwrite(arena_start, 1, arena_bytes, f);
+    // Nothing here about the device arena, deliberately.  It used to be written
+    // separately because it was host memory; it is guest memory now, so it came
+    // through the page walk above with everything else - and a resume will get
+    // it back the same way, at the same guest addresses the guest's own
+    // pointers refer to.
     long total = std::ftell(f);
     std::fclose(f);
 
@@ -418,8 +493,8 @@ int64_t write_snapshot(x86emu::Emulator& e, const std::string& path) {
                  (unsigned long long)unique);
     std::fprintf(stderr, "[snap] left behind: %.1f MB of file-backed pages\n",
                  from_file * kPage / 1048576.0);
-    std::fprintf(stderr, "[snap] guest %.1f MB + arena %.1f MB = %.1f MB raw\n",
-                 written * kPage / 1048576.0, arena_bytes / 1048576.0,
+    std::fprintf(stderr, "[snap] %.1f MB raw (device memory included, since it is\n"
+                         "[snap] guest memory now)\n",
                  total / 1048576.0);
     return total;
 }
@@ -446,6 +521,17 @@ struct Report {
 // ---------------------------------------------------------------------------
 
 int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
+    // The kernels read pointers out of device memory in four places - a concat's
+    // list of inputs, a split's list of outputs - and those are guest addresses
+    // too.  Told once, on the first call.
+    static bool told = [] {
+        vvstub_set_device_host([](unsigned long long p) -> void* {
+            return device_host(p);
+        });
+        return true;
+    }();
+    (void)told;
+
     double t_entry = vvstub_timing ? vvstub_now() : 0;
     struct Account {
         double t;
@@ -455,8 +541,6 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
     uint64_t a[VVHOST_SLOTS];
     for (int i = 0; i < VVHOST_SLOTS; i++) a[i] = e.mem.read64(argp + 8u * i);
 
-    auto ptr = [](uint64_t v) { return reinterpret_cast<void*>(v); };
-    auto cptr = [](uint64_t v) { return reinterpret_cast<const void*>(v); };
 
     switch (id) {
         case VVH_ALIVE:
@@ -465,12 +549,8 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
         case VVH_SNAPSHOT:
             return write_snapshot(e, e.mem.read_cstring(a[0]));
 
-        case VVH_MALLOC: {
-            uint64_t p = device_alloc(a[0]);
-            if (p) live_blocks[p - reinterpret_cast<uint64_t>(arena_start)] =
-                (a[0] + 255) & ~255ull;
-            return static_cast<int64_t>(p);
-        }
+        case VVH_MALLOC:
+            return static_cast<int64_t>(device_alloc(e, a[0]));
         case VVH_FREE:
             device_free(a[0]);
             return 0;
@@ -486,7 +566,7 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
         }
         case VVH_MEMSET: {
             if (is_device(a[0]))
-                std::memset(ptr(a[0]), static_cast<int>(a[1]), a[2]);
+                std::memset(device_host(a[0]), static_cast<int>(a[1]), a[2]);
             else {
                 std::vector<uint8_t> tmp(a[2], static_cast<uint8_t>(a[1]));
                 if (a[2]) e.mem.write(a[0], tmp.data(), a[2]);
@@ -500,42 +580,51 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
         case VVH_CUDNN_CREATE_TENSOR: {
             void* d = nullptr;
             cudnnCreateTensorDescriptor(&d);
-            return reinterpret_cast<int64_t>(d);
+            return static_cast<int64_t>(remember_descriptor(d));
         }
-        case VVH_CUDNN_DESTROY_TENSOR:
-            return cudnnDestroyTensorDescriptor(ptr(a[0]));
+        case VVH_CUDNN_DESTROY_TENSOR: {
+            int rc = cudnnDestroyTensorDescriptor(descriptor(a[0]));
+            forget_descriptor(a[0]);
+            return rc;
+        }
         case VVH_CUDNN_CREATE_FILTER: {
             void* d = nullptr;
             cudnnCreateFilterDescriptor(&d);
-            return reinterpret_cast<int64_t>(d);
+            return static_cast<int64_t>(remember_descriptor(d));
         }
-        case VVH_CUDNN_DESTROY_FILTER:
-            return cudnnDestroyFilterDescriptor(ptr(a[0]));
+        case VVH_CUDNN_DESTROY_FILTER: {
+            int rc = cudnnDestroyFilterDescriptor(descriptor(a[0]));
+            forget_descriptor(a[0]);
+            return rc;
+        }
         case VVH_CUDNN_CREATE_CONV: {
             void* d = nullptr;
             cudnnCreateConvolutionDescriptor(&d);
-            return reinterpret_cast<int64_t>(d);
+            return static_cast<int64_t>(remember_descriptor(d));
         }
-        case VVH_CUDNN_DESTROY_CONV:
-            return cudnnDestroyConvolutionDescriptor(ptr(a[0]));
+        case VVH_CUDNN_DESTROY_CONV: {
+            int rc = cudnnDestroyConvolutionDescriptor(descriptor(a[0]));
+            forget_descriptor(a[0]);
+            return rc;
+        }
 
         case VVH_CUDNN_SET_TENSOR_ND: {
             int nb = static_cast<int>(a[2]);
             std::vector<int> dim = guest_ints(e, a[3], nb);
             std::vector<int> stride = a[4] ? guest_ints(e, a[4], nb) : std::vector<int>();
-            return cudnnSetTensorNdDescriptor(ptr(a[0]), static_cast<int>(a[1]), nb,
+            return cudnnSetTensorNdDescriptor(descriptor(a[0]), static_cast<int>(a[1]), nb,
                                               dim.data(),
                                               stride.empty() ? nullptr : stride.data());
         }
         case VVH_CUDNN_SET_TENSOR_4D:
             return cudnnSetTensor4dDescriptor(
-                ptr(a[0]), static_cast<int>(a[1]), static_cast<int>(a[2]),
+                descriptor(a[0]), static_cast<int>(a[1]), static_cast<int>(a[2]),
                 static_cast<int>(a[3]), static_cast<int>(a[4]), static_cast<int>(a[5]),
                 static_cast<int>(a[6]));
         case VVH_CUDNN_SET_FILTER_ND: {
             int nb = static_cast<int>(a[3]);
             std::vector<int> dim = guest_ints(e, a[4], nb);
-            return cudnnSetFilterNdDescriptor(ptr(a[0]), static_cast<int>(a[1]),
+            return cudnnSetFilterNdDescriptor(descriptor(a[0]), static_cast<int>(a[1]),
                                               static_cast<int>(a[2]), nb, dim.data());
         }
         case VVH_CUDNN_SET_CONV_ND: {
@@ -543,35 +632,35 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
             std::vector<int> pad = guest_ints(e, a[2], nb);
             std::vector<int> stride = guest_ints(e, a[3], nb);
             std::vector<int> dil = guest_ints(e, a[4], nb);
-            return cudnnSetConvolutionNdDescriptor(ptr(a[0]), nb, pad.data(),
+            return cudnnSetConvolutionNdDescriptor(descriptor(a[0]), nb, pad.data(),
                                                    stride.data(), dil.data(),
                                                    static_cast<int>(a[5]),
                                                    static_cast<int>(a[6]));
         }
         case VVH_CUDNN_SET_CONV_GROUPS:
-            return cudnnSetConvolutionGroupCount(ptr(a[0]), static_cast<int>(a[1]));
+            return cudnnSetConvolutionGroupCount(descriptor(a[0]), static_cast<int>(a[1]));
 
         case VVH_CUDNN_CONV_FORWARD: {
             float alpha = guest_float(e, a[0], 1.0f);
             float beta = guest_float(e, a[7], 0.0f);
-            return cudnnConvolutionForward(nullptr, &alpha, ptr(a[1]), cptr(a[2]),
-                                           ptr(a[3]), cptr(a[4]), ptr(a[5]),
-                                           static_cast<int>(a[6]), nullptr, 0, &beta,
-                                           ptr(a[8]), ptr(a[9]));
+            return cudnnConvolutionForward(
+                nullptr, &alpha, descriptor(a[1]), device_host(a[2]), descriptor(a[3]),
+                device_host(a[4]), descriptor(a[5]), static_cast<int>(a[6]), nullptr, 0,
+                &beta, descriptor(a[8]), device_host(a[9]));
         }
         case VVH_CUDNN_CONV_BACKWARD_DATA: {
             float alpha = guest_float(e, a[0], 1.0f);
             float beta = guest_float(e, a[7], 0.0f);
-            return cudnnConvolutionBackwardData(nullptr, &alpha, ptr(a[1]), cptr(a[2]),
-                                                ptr(a[3]), cptr(a[4]), ptr(a[5]),
-                                                static_cast<int>(a[6]), nullptr, 0,
-                                                &beta, ptr(a[8]), ptr(a[9]));
+            return cudnnConvolutionBackwardData(
+                nullptr, &alpha, descriptor(a[1]), device_host(a[2]), descriptor(a[3]),
+                device_host(a[4]), descriptor(a[5]), static_cast<int>(a[6]), nullptr, 0,
+                &beta, descriptor(a[8]), device_host(a[9]));
         }
         case VVH_CUDNN_ADD_TENSOR: {
             float alpha = guest_float(e, a[0], 1.0f);
             float beta = guest_float(e, a[3], 0.0f);
-            return cudnnAddTensor(nullptr, &alpha, ptr(a[1]), cptr(a[2]), &beta,
-                                  ptr(a[4]), ptr(a[5]));
+            return cudnnAddTensor(nullptr, &alpha, descriptor(a[1]), device_host(a[2]),
+                                  &beta, descriptor(a[4]), device_host(a[5]));
         }
 
         // ---- cuBLAS ---------------------------------------------------------
@@ -581,9 +670,10 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
             return cublasSgemm_v2(
                 nullptr, static_cast<int>(a[0]), static_cast<int>(a[1]),
                 static_cast<int>(a[2]), static_cast<int>(a[3]), static_cast<int>(a[4]),
-                &alpha, static_cast<const float*>(cptr(a[6])), static_cast<int>(a[7]),
-                static_cast<const float*>(cptr(a[8])), static_cast<int>(a[9]), &beta,
-                static_cast<float*>(ptr(a[11])), static_cast<int>(a[12]));
+                &alpha, device_as<const float>(a[6]),
+                static_cast<int>(a[7]), device_as<const float>(a[8]),
+                static_cast<int>(a[9]), &beta,
+                device_as<float>(a[11]), static_cast<int>(a[12]));
         }
         case VVH_CUBLAS_SGEMM_BATCHED: {
             float alpha = guest_float(e, a[5], 1.0f);
@@ -596,9 +686,10 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
             return cublasSgemmStridedBatched(
                 nullptr, static_cast<int>(a[0]), static_cast<int>(a[1]),
                 static_cast<int>(a[2]), static_cast<int>(a[3]), static_cast<int>(a[4]),
-                &alpha, static_cast<const float*>(cptr(a[6])), static_cast<int>(a[7]),
-                extra[0], static_cast<const float*>(cptr(a[8])), static_cast<int>(a[9]),
-                extra[1], &beta, static_cast<float*>(ptr(a[11])),
+                &alpha, device_as<const float>(a[6]),
+                static_cast<int>(a[7]), extra[0],
+                device_as<const float>(a[8]), static_cast<int>(a[9]),
+                extra[1], &beta, device_as<float>(a[11]),
                 static_cast<int>(a[12]), extra[2], static_cast<int>(extra[3]));
         }
         case VVH_CUBLAS_SGEAM: {
@@ -606,11 +697,12 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
             float beta = guest_float(e, a[7], 0.0f);
             return cublasSgeam(nullptr, static_cast<int>(a[0]), static_cast<int>(a[1]),
                                static_cast<int>(a[2]), static_cast<int>(a[3]), &alpha,
-                               static_cast<const float*>(cptr(a[5])),
+                               device_as<const float>(a[5]),
                                static_cast<int>(a[6]), &beta,
-                               static_cast<const float*>(cptr(a[8])),
+                               device_as<const float>(a[8]),
                                static_cast<int>(a[9]),
-                               static_cast<float*>(ptr(a[10])), static_cast<int>(a[11]));
+                               device_as<float>(a[10]),
+                               static_cast<int>(a[11]));
         }
 
         default:
