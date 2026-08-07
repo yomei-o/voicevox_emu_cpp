@@ -991,6 +991,18 @@ static const struct {
     {"softmax_warp_forwardI", 5, do_softmax},
 };
 
+// How many arguments a kernel takes, or 0 for one this build does not know.
+//
+// `cudaLaunchKernel` is handed a `void**` with no count, so a caller that has
+// to marshal the arguments across a boundary - the emulator's host shim does -
+// has no way to know where the array ends.  The count comes from the signature,
+// which is what the table already records.
+int vvstub_kernel_nargs(const char* name) {
+    for (size_t i = 0; i < sizeof kKernels / sizeof kKernels[0]; i++)
+        if (strstr(name, kKernels[i].key)) return kKernels[i].nargs;
+    return 0;
+}
+
 // Returns 1 when the launch was handled, 0 when nothing here knows it yet.
 int vvstub_run_kernel(const char* name, void** args) {
     static int inited;

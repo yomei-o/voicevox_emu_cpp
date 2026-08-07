@@ -37,6 +37,34 @@ mkdir -p "$OUT"
 # `-march=native` is *not* the answer on a machine with AVX-512: this repo's
 # flattened Eigen does not carry src/Core/arch/AVX512, and the build fails
 # outright.  AVX2 is the practical ceiling with it.
+# Which half of the shim these stand-ins are.
+#
+#   native  they do the arithmetic themselves, in this process.  This is the
+#           build the whole shim was got right with, and it still is the one to
+#           debug against: it runs in a second.
+#   guest   they run *inside* the emulator and hand the arithmetic to the host
+#           through one reserved syscall (src/vvhostcall.h).  Nothing here
+#           computes, so nothing here needs Eigen or a C++ compiler - and the
+#           code must be SSE2, because the guest is.
+MODE=${MODE:-native}
+case "$MODE" in
+    native)
+        RUNTIME_SRC="src/cudastub.c src/cudakernels.c src/cudainfo.c"
+        CUDNN_SRC="src/cudnn_real.cpp"
+        CUBLAS_SRC="src/cublas_real.cpp"
+        ;;
+    guest)
+        RUNTIME_SRC="src/cudaguest.c src/cudainfo.c"
+        CUDNN_SRC="src/cudnnguest.c"
+        CUBLAS_SRC="src/cublasguest.c"
+        # The guest is SSE2 and has no VEX decoder.  The host flags below would
+        # put an AVX `vmovq` in the very first stub the provider calls.
+        [ -z "$OPT" ] && OPT="-O2"
+        ;;
+    *) echo "MODE must be native or guest"; exit 1 ;;
+esac
+echo "mode $MODE"
+
 if [ -z "$OPT" ]; then
     if grep -q ' avx2 ' /proc/cpuinfo 2>/dev/null; then
         OPT="-O3 -mavx2 -mfma"
@@ -98,16 +126,17 @@ for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libcudnn.so.8 libcu
     base=$(echo "$lib" | sed 's/\.so\..*//')
     extra=""
     cc="${CC:-gcc} $OPT"
-    [ "$base" = libcudart ] && extra="src/cudastub.c src/cudakernels.c"
+    [ "$base" = libcudart ] && extra="$RUNTIME_SRC"
     if [ "$base" = libcublas ]; then
-        extra="src/cublas_real.cpp"
-        cc="${CXX:-$HOME/gpp/bin/g++} $OPT -Ithird_party/eigen_flat"
+        extra="$CUBLAS_SRC"
+        [ "$MODE" = native ] && cc="${CXX:-$HOME/gpp/bin/g++} $OPT -Ithird_party/eigen_flat"
     fi
     if [ "$base" = libcudnn ]; then
-        # The convolutions are C++ and use Eigen, so this one needs a C++
-        # compiler.  tools/get_gpp_nosudo.sh provides one where apt cannot.
-        extra="src/cudnn_real.cpp"
-        cc="${CXX:-$HOME/gpp/bin/g++} $OPT -Ithird_party/eigen_flat"
+        # Natively the convolutions are here and they use Eigen, so this one
+        # needs a C++ compiler; tools/get_gpp_nosudo.sh provides one where apt
+        # cannot.  In guest mode there is nothing to compile but trampolines.
+        extra="$CUDNN_SRC"
+        [ "$MODE" = native ] && cc="${CXX:-$HOME/gpp/bin/g++} $OPT -Ithird_party/eigen_flat"
     fi
 
     # The real CUDA libraries version their symbols, and the provider's

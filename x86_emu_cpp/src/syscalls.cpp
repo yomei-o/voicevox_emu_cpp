@@ -732,6 +732,18 @@ void Emulator::install_syscall_handlers() {
         uint64_t nr = cpu_->regs[RAX];
         const uint64_t a[6] = {cpu_->regs[RDI], cpu_->regs[RSI], cpu_->regs[RDX],
                                cpu_->regs[R10], cpu_->regs[R8],  cpu_->regs[R9]};
+        // An embedder can put host services behind one reserved number.  The
+        // emulator knows nothing about what they are: it hands over an id and a
+        // pointer to the guest's argument block and returns whatever comes
+        // back.  Nothing is reserved here that Linux could ever use - its
+        // numbers are three digits - so a guest that has not been built for
+        // this cannot reach it by accident.
+        if (nr == kHostCallSyscall) {
+            if (!on_host_call) return static_cast<void>(cpu_->regs[RAX] = (uint64_t)kENOSYS);
+            cpu_->regs[RAX] = static_cast<uint64_t>(on_host_call(*this, a[0], a[1]));
+            return;
+        }
+
         Sys sys = map_x86_64(nr);
         if (sys == Sys::Unknown && opt_.trace_calls)
             std::fprintf(stderr, "[sys] unimplemented syscall %llu\n",
