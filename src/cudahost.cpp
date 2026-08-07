@@ -305,6 +305,11 @@ int64_t write_snapshot(x86emu::Emulator& e, const std::string& path) {
     uint64_t zero = 0, written = 0;
     std::vector<uint64_t> hashes;
     hashes.reserve(pages.size());
+    // Where the pages are, by mapping.  A page that is a library's own image
+    // could be re-read from the file on resume rather than carried, and this is
+    // what says whether that is worth the machinery - guessing at it is how you
+    // end up building the wrong half.
+    std::map<std::string, uint64_t> by_region;
     for (uint64_t index : pages) {
         const uint8_t* data = e.mem.page_data(index);
         if (!data) continue;
@@ -315,11 +320,24 @@ int64_t write_snapshot(x86emu::Emulator& e, const std::string& path) {
             zero++;
             continue;
         }
+        uint64_t addr = index * kPage;
+        const std::string* where = nullptr;
+        for (const auto& r : e.mem.regions())
+            if (addr >= r.base && addr < r.base + r.size) where = &r.name;
+        by_region[where ? *where : std::string("(anonymous)")]++;
+
         hashes.push_back(fnv1a(data, kPage));
         std::fwrite(&index, sizeof index, 1, f);
         std::fwrite(data, 1, kPage, f);
         written++;
     }
+
+    std::vector<std::pair<uint64_t, std::string>> ranked;
+    for (const auto& [name, n] : by_region) ranked.push_back({n, name});
+    std::sort(ranked.rbegin(), ranked.rend());
+    for (size_t i = 0; i < ranked.size() && i < 12; i++)
+        std::fprintf(stderr, "[snap]   %8.1f MB  %s\n",
+                     ranked[i].first * kPage / 1048576.0, ranked[i].second.c_str());
 
     // The arena, up to the high-water mark.  Its address is fixed, so a resume
     // can put it back where the guest's pointers expect it.
