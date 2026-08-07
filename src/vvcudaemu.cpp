@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "emulator.h"
@@ -27,6 +28,11 @@ int main(int argc, char** argv) {
     x86emu::Emulator::Options opt;
     std::string program;
     std::vector<std::string> guest_args;
+    // A Linux guest is given only PATH by default - deliberately, so that a
+    // Windows host's variables do not reach it - so anything the guest is meant
+    // to read has to be said here.  That default cost this project two wrong
+    // explanations before it was noticed.
+    std::vector<std::string> guest_env;
 
     int i = 1;
     for (; i < argc; ++i) {
@@ -37,8 +43,11 @@ int main(int argc, char** argv) {
             opt.trace_calls = true;
         } else if (arg == "--map" || arg == "-m") {
             opt.dump_map = true;
+        } else if (arg == "--env" && i + 1 < argc) {
+            guest_env.push_back(argv[++i]);
         } else if (arg == "--help" || arg == "-h") {
-            std::printf("vvcudaemu [--sysroot DIR] [-c] [-m] <program> [args...]\n");
+            std::printf("vvcudaemu [--sysroot DIR] [--env NAME=VALUE] [-c] [-m]"
+                        " <program> [args...]\n");
             return 0;
         } else if (!arg.empty() && arg[0] == '-' && arg != "-") {
             std::fprintf(stderr, "vvcudaemu: unknown option %s\n", arg.c_str());
@@ -58,6 +67,20 @@ int main(int argc, char** argv) {
 
     x86emu::Emulator emu(opt);
     emu.on_host_call = vv_host_call;
+    if (!guest_env.empty()) {
+        std::vector<std::pair<std::string, std::string>> env;
+        env.emplace_back("PATH", "/usr/local/bin:/usr/bin:/bin");
+        for (const std::string& e : guest_env) {
+            size_t eq = e.find('=');
+            if (eq == std::string::npos || eq == 0) {
+                std::fprintf(stderr, "vvcudaemu: --env wants NAME=VALUE, got %s\n",
+                             e.c_str());
+                return 2;
+            }
+            env.emplace_back(e.substr(0, eq), e.substr(eq + 1));
+        }
+        emu.set_environment(std::move(env));
+    }
     if (const char* t = std::getenv("VVSTUB_TIME")) vvstub_timing = *t && *t != '0';
 
     try {

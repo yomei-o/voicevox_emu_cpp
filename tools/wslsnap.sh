@@ -14,6 +14,9 @@ set -e
 cd "$(dirname "$0")/.."
 SNAP=$HOME/vvsession.snap
 
+echo "== rebuilding the emulator (it carries the --env the guest needs)"
+sh tools/wslbuild.sh > /dev/null 2>&1 || { sh tools/wslbuild.sh; exit 1; }
+
 echo "== rebuilding the guest program (it makes the call)"
 ( cd "$HOME/vv/cudarun" &&
   gcc -O2 -I/mnt/c/prog/claude/voicevox_emu_cpp/src -o cudavvm \
@@ -23,10 +26,15 @@ cp "$HOME/vv/cudarun/cudavvm" guest/cudavvm
 
 echo "== running to the point a resume would start from"
 rm -f "$SNAP" sysroot/opt/vvcuda/out.wav
-VVSNAPSHOT=$SNAP sh tools/wslrun_cuda.sh "ずんだもんなのだ" 2>&1 |
-    grep -vE "^x86emu: open|^kernel " | grep -E "snapshot|\[snap\]|tts took|produced|WARNING"
+VVSNAPSHOT=$SNAP sh tools/wslrun_cuda.sh "ずんだもんなのだ" > "$HOME/vvsnap.log" 2>&1 || true
+grep -vE "^x86emu: open|^kernel " "$HOME/vvsnap.log" |
+    grep -E "snapshot|\[snap\]|tts took|produced|WARNING"
 
-[ -f "$SNAP" ] || { echo "no snapshot written"; exit 1; }
+[ -f "$SNAP" ] || {
+    echo "no snapshot written - the last of the run was:"
+    grep -vE "^x86emu: open|^kernel " "$HOME/vvsnap.log" | tail -8
+    exit 1
+}
 raw=$(wc -c < "$SNAP")
 echo
 echo "== how it compresses"

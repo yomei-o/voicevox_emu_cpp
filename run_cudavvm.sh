@@ -35,9 +35,11 @@ cp guest/cudavvm guest/libvoicevox_core.so "guest/$VVM" "$OUT/"
 # The stand-ins go where a Debian with CUDA installed would keep them, not on
 # LD_LIBRARY_PATH.  Two reasons, and the second is the one that bit: the
 # provider's own dependencies are resolved against *its* RUNPATH and the system
-# directories, and MSYS rewrites any variable whose name ends in PATH before a
-# native Windows program ever sees it - so LD_LIBRARY_PATH=/opt/vvcuda reached
-# the guest as a Windows path and did nothing at all.
+# directories - and setting LD_LIBRARY_PATH does not help, for a reason that
+# took two wrong guesses to find: **the emulator gives a Linux guest only
+# PATH**.  It is deliberate (a Windows host's variables would be worse than
+# nothing to a Linux guest, see setup_linux_stack), and it means the guest never
+# saw the variable at all.  MSYS was blamed for this first and was innocent.
 #
 # And they must be built for the *guest*, which is SSE2: the default flags aim
 # at the host and include -mavx2, and an emulator with no VEX decoder stops on
