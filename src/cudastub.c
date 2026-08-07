@@ -118,6 +118,14 @@ int cudaLaunchKernel(const void* func, unsigned long long gx, unsigned long long
 __attribute__((destructor)) static void vvstub_report(void) {
     fprintf(stderr, "[cuda] %zu kernels registered, %zu launches\n", kernel_count,
             launches);
+    // A kernel nothing implements returns success and computes nothing, and the
+    // audio that comes out is wrong rather than absent.  The per-launch lines
+    // scroll away; a count at the end does not.
+    if (unhandled)
+        fprintf(stderr,
+                "[cuda] WARNING: %zu launches computed nothing - no "
+                "implementation for those kernels, so the output is wrong\n",
+                unhandled);
     if (vvstub_timing) {
         static const char* names[VVSTUB_T_COUNT] = {"kernels", "cuDNN", "cuBLAS"};
         double total = 0;

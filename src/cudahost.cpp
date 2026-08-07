@@ -182,21 +182,32 @@ std::vector<uint8_t> guest_bytes(x86emu::Emulator& e, uint64_t addr, uint64_t le
 
 // How much of an argument to copy.  The kernels take pointers (8), DivMods
 // (12), TArray<int64_t,8> (72), TArray<DivMod,8> (100) and TArray<void*,32>
-// (264) - so 264 covers everything, and the handler reads only what its
+// (264) - so 288 covers everything, and the handler reads only what its
 // signature says.  Copying more than the guest allocated is harmless *unless*
-// it runs off the end of a mapping, which is why this backs off on a fault
-// rather than assuming.
+// it runs off the end of a mapping, so this stops at the first page it cannot
+// read.
+//
+// Page at a time, not halving.  Halving looks equivalent and is not: an
+// argument that sits eight bytes before the end of the last mapped page would
+// come back as a *four* byte read, and a pointer truncated to its low half is a
+// wrong answer rather than a short one.  Stopping at a page boundary can only
+// truncate an argument that straddles into unmapped memory, which is one the
+// guest could not have written either.
 uint64_t guest_read_tolerant(x86emu::Emulator& e, uint64_t addr, uint8_t* dst,
                              uint64_t want) {
-    while (want) {
+    constexpr uint64_t kPage = x86emu::Memory::kPageSize;
+    uint64_t done = 0;
+    while (done < want) {
+        uint64_t n = kPage - ((addr + done) & (kPage - 1));
+        if (n > want - done) n = want - done;
         try {
-            e.mem.read(addr, dst, want);
-            return want;
+            e.mem.read(addr + done, dst + done, n);
         } catch (const x86emu::MemoryFault&) {
-            want /= 2;
+            break;
         }
+        done += n;
     }
-    return 0;
+    return done;
 }
 
 float guest_float(x86emu::Emulator& e, uint64_t addr, float fallback) {

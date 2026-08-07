@@ -24,6 +24,13 @@ nothing.
   `tools/wavcmp.mjs` does the comparison. It is not bit-identical and cannot be:
   `RSQRTPS`/`RCPPS` are *approximate* by definition, hardware answers them to
   about twelve bits and this emulator computes them exactly.
+- **Synthesis in seconds, through the CUDA build.** `tools/wslrun_cuda.sh` runs
+  the CUDA runtime inside `vvcudaemu` - the emulator with the shim behind one
+  reserved syscall - on a machine with no GPU: **5 s** for "あ" against 3476 s
+  with the same arithmetic interpreted, and the audio is within 3 of 3912 of a
+  Tesla T4's own. All 377 kernel launches an utterance makes are handled. The
+  tensors never move: a device pointer is host memory, so the 1983 boundary
+  crossings in a run come to 0.06 s between them. [CUDA_SHIM.md](CUDA_SHIM.md).
 - **The API is complete.** All 63 functions of `voicevox_core.h`. `apitest.c`
   built against the real library and against this one prints the same 45 checks
   and the same values, differing only in a random UUID.
@@ -92,6 +99,20 @@ All of it belongs upstream in `x86_emu_cpp`; none of it is voicevox-specific.
 | `src/files.cpp` | the same for a child's redirected stdout |
 | `web/wasm_api.cpp` | `emu_set_sysroot` (this repo's `web/` copy) |
 
+And a second round, for the CUDA shim - also all general, none of it
+voicevox-specific:
+
+| file | what |
+| --- | --- |
+| `src/memory.{h,cpp}` | pages are **reserved, not allocated**; a whole page of zeros written over an untouched page is skipped. Peak for the CUDA run: 1058 MB -> 538 MB, measured both ways with `tools/wslmemab.sh` |
+| `src/syscalls.cpp` | a file mapping is read a megabyte at a time, not into one buffer the size of the segment (430 MB here); and the region is **named after the file** |
+| `src/emulator.{h,cpp}` | `on_host_call` and one reserved syscall, so an embedder can put host services behind it; `alloc_pages` takes a region name |
+| `src/cpu.cpp` | an unsupported opcode says **which mapping** it is in |
+| `src/files.{h,cpp}` | `path_of(fd)`, which is where the mapping's name comes from |
+
+The naming paid for itself on its first run: the AVX instruction that stopped
+everything was not in ONNX Runtime, it was in *our own* libcudart stand-in.
+
 `statx` (syscall 332) landed in `syscalls.cpp` / `syscalls_files.inc` before this
 project's second session and is already in the vendored copy.
 
@@ -109,8 +130,15 @@ this project spent a day explaining. `EMU=` still overrides.
 
 ## What is unfinished
 
-1. **Speed.** This is the whole story now. The interpreter retires tens of
-   millions of instructions a second; ORT wants billions.
+0. **Read [CUDA_SHIM.md](CUDA_SHIM.md) first.** The speed story below is still
+   true of the CPU path, and it is no longer the only path. Running the *CUDA*
+   build with the arithmetic handed to the host takes synthesis from **3476
+   seconds to 5** for the same utterance, with the same audio. What is left
+   there is not arithmetic at all: building the sessions takes 6 m 37 s, all of
+   it interpreted, and that is now the whole cost of a run.
+
+1. **Speed.** This is the whole story for the CPU path. The interpreter retires
+   tens of millions of instructions a second; ORT wants billions.
 
    What helped: the direct-mapped page cache in `Memory::host_ptr`, worth about
    25 % on a memory-bound guest (memtest 8m03s -> 6m23s).

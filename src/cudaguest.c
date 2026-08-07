@@ -55,7 +55,7 @@ typedef struct {
 
 static Kernel* kernels;
 static size_t kernel_count, kernel_cap;
-static size_t launches;
+static size_t launches, unhandled;
 
 void __cudaRegisterFunction(void** fatbin, const char* host_fn, char* device_fn,
                             const char* name, int tid, void* bid, void* bdim,
@@ -88,6 +88,7 @@ int cudaLaunchKernel(const void* func, unsigned long long gx, unsigned long long
     const char* name = name_of(func);
     VVA((long)name, (long)args);
     long handled = vvhost(VVH_LAUNCH, a);
+    if (!handled) unhandled++;
     if (vvstub_trace || !handled) {
         printf("kernel %s%s\n", handled ? "[done] " : "", name);
         fflush(stdout);
@@ -98,6 +99,17 @@ int cudaLaunchKernel(const void* func, unsigned long long gx, unsigned long long
 __attribute__((destructor)) static void vvguest_report(void) {
     fprintf(stderr, "[cuda] %zu kernels registered, %zu launches\n", kernel_count,
             launches);
+    // A kernel nothing implements returns success and computes nothing, and the
+    // audio that comes out is wrong rather than absent.  That is the failure
+    // mode this project spent a day learning to distrust, so it says so - the
+    // per-launch lines above scroll away, and a count at the end does not.
+    // A model this table was not written against is exactly where it will
+    // happen.
+    if (unhandled)
+        fprintf(stderr,
+                "[cuda] WARNING: %zu launches computed nothing - no host "
+                "implementation for those kernels, so the output is wrong\n",
+                unhandled);
     fflush(stderr);
 }
 
