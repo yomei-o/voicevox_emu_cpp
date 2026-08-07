@@ -163,6 +163,17 @@ void emu_set_sysroot(const char* dir) {
     x86emu::FileTable::set_sysroot(dir ? dir : "");
 }
 
+// Sets a variable the way the C library will actually see it.
+//
+// Writing to Module.ENV from JavaScript does not do this: emscripten builds
+// `environ` while the runtime starts, and a later assignment is not read back.
+// So the diagnostics that the shim and the emulator take from the environment -
+// VVSTUB_STATS, X86EMU_PROFILE - were silently off in every browser run, which
+// looks exactly like "nothing to report".
+void emu_setenv(const char* name, const char* value) {
+    if (name && *name) setenv(name, value ? value : "", 1);
+}
+
 const char* emu_error() { return g_error.c_str(); }
 const char* emu_format() { return g_format.c_str(); }
 double emu_instructions() { return static_cast<double>(g_instructions); }

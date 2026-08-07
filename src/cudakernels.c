@@ -53,9 +53,22 @@ typedef struct {
     DivMod data_[8];
 } TArrayDivMod;
 
+// A pointer the way the *guest* stores one: eight bytes, whatever the host is.
+//
+// This matters wherever an array of pointers is indexed rather than read one at
+// a time.  A single pointer arrives in an eight-byte argument slot and reading
+// four bytes of it on a 32-bit host still gets the right value, little-endian -
+// but `inputs[1]` with a four-byte stride reads the *top half of inputs[0]*,
+// which is zero.  On x86-64 the two are the same and the mistake is invisible;
+// in WebAssembly it is the difference between concatenating two tensors and
+// concatenating one of them with a null.
+typedef unsigned long long GuestPtr;
+
+static void* guest_ptr(GuestPtr p) { return (void*)(size_t)p; }
+
 typedef struct {
     int size_;
-    void* data_[32];
+    GuestPtr data_[32];
 } TArrayPtr;
 
 // ---------------------------------------------------------------------------
@@ -640,7 +653,7 @@ static int do_gather(const char* name, void** args) {
     const DivMod* out_block = (const DivMod*)args[2];
     const DivMod* block = (const DivMod*)args[3];
     const void* indices = ARG(const void*, 4);
-    unsigned long index_size = ARG(unsigned long, 5);
+    unsigned long long index_size = ARG(unsigned long long, 5);
     const char* in = ARG(const char*, 6);
     char* out = ARG(char*, 7);
     int n = ARG(int, 8);
@@ -681,7 +694,7 @@ static int do_concat(const char* name, void** args) {
     const long long* concat_range = ARG(const long long*, 3);
     const long long* mapping = ARG(const long long*, 4);
     char* out = ARG(char*, 5);
-    const void** inputs = ARG(const void**, 6);
+    const GuestPtr* inputs = ARG(const GuestPtr*, 6);
     int n = ARG(int, 7);
 
     for (int id = 0; id < n; id++) {
@@ -692,7 +705,7 @@ static int do_concat(const char* name, void** args) {
         int input_index = (int)mapping[block_index];
         long long range_left = input_index == 0 ? 0 : concat_range[input_index - 1];
         long long block_offset = block_index - range_left;
-        const char* in = (const char*)inputs[input_index];
+        const char* in = (const char*)guest_ptr(inputs[input_index]);
         long long src = (long long)outer_block_index * concat_sizes[input_index] * inside->d_ +
                         block_offset * inside->d_ + offset;
         memcpy(out + (long long)id * width, in + src * width, (size_t)width);
@@ -725,7 +738,7 @@ static int do_concat_same(const char* name, void** args) {
         divmod(concat, block_index, &input_index, &block_offset);
         long long src = (long long)outer_index * concat->d_ * inside->d_ +
                         (long long)block_offset * inside->d_ + offset;
-        const char* in = (const char*)inputs->data_[input_index];
+        const char* in = (const char*)guest_ptr(inputs->data_[input_index]);
         memcpy(out + (long long)id * w, in + src * w, (size_t)w);
     }
     NOTE_OUT(out, t, n);
@@ -752,7 +765,7 @@ static int do_split_same(const char* name, void** args) {
         divmod(split, block_index, &output_index, &block_offset);
         long long dst = (long long)outer_index * split->d_ * inside->d_ +
                         (long long)block_offset * inside->d_ + offset;
-        char* o = (char*)outputs->data_[output_index];
+        char* o = (char*)guest_ptr(outputs->data_[output_index]);
         memcpy(o + dst * w, in + (long long)id * w, (size_t)w);
     }
     return 1;
@@ -832,15 +845,15 @@ static int do_scatter_nd(const char* name, void** args) {
     int w = width_of(t);
     if (!w) return 0;
     char* out = ARG(char*, 0);
-    unsigned long num_indices = ARG(unsigned long, 1);
+    unsigned long long num_indices = ARG(unsigned long long, 1);
     const long long* indices = ARG(const long long*, 2);
     long long last_dim = ARG(long long, 3);
     const long long* counts_and_dims = ARG(const long long*, 4);
     const char* updates = ARG(const char*, 5);
-    unsigned long slice = ARG(unsigned long, 6);
+    unsigned long long slice = ARG(unsigned long long, 6);
     if (last_dim <= 0 || last_dim > 8) return 0;
 
-    for (unsigned long id = 0; id < num_indices; id++) {
+    for (unsigned long long id = 0; id < num_indices; id++) {
         long long offset = 0;
         for (long long k = 0; k < last_dim; k++) {
             long long index = indices[last_dim * (long long)id + k];

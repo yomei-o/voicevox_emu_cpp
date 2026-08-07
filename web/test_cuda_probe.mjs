@@ -30,6 +30,17 @@ globalThis.x86emuLog = (line) => console.error('[emu]', line);
 const mod = await createX86EmuCuda();
 const SYSROOT = '/sysroot';
 
+// The shim reads its diagnostics out of the environment, and emscripten neither
+// inherits the host process's nor notices a later write to Module.ENV - it
+// builds `environ` as the runtime starts.  emu_setenv goes through the C
+// library, which is what getenv reads.
+for (const name of ['VVSTUB_STATS', 'VVSTUB_KARGS', 'VVSTUB_TRACE', 'VVSTUB_TIME',
+                    'X86EMU_PROFILE']) {
+    if (process.env[name]) {
+        mod.ccall('emu_setenv', null, ['string', 'string'], [name, process.env[name]]);
+    }
+}
+
 function put(guestPath, hostPath) {
     const full = SYSROOT + guestPath;
     mod.FS.mkdirTree(path.posix.dirname(full));
