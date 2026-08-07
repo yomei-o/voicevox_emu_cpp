@@ -19,8 +19,10 @@
 #include "emulator.h"
 #include "files.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -378,6 +380,10 @@ bool Emulator::save_state(const std::string& path) const {
         std::vector<uint64_t> live = mem.live_pages();
         std::vector<uint64_t> keep, from_file;
         keep.reserve(live.size());
+        // Where the carried pages are, by mapping.  Whether a state is worth
+        // shrinking, and which end to start at, is a question about this table
+        // and not one worth guessing at.
+        std::map<std::string, uint64_t> by_region;
         uint64_t blank = 0;
         for (uint64_t index : live) {
             // A page of zeros is not worth carrying: it is already reserved by
@@ -406,6 +412,11 @@ bool Emulator::save_state(const std::string& path) const {
                 }
             }
             keep.push_back(index);
+            const Memory::Region* named = home;
+            if (!named)
+                for (const auto& r : regions)
+                    if (addr >= r.base && addr < r.base + r.size) named = &r;
+            by_region[named ? named->name : std::string("(anonymous)")]++;
         }
         w.u64(keep.size());
         for (uint64_t index : keep) {
@@ -425,6 +436,13 @@ bool Emulator::save_state(const std::string& path) const {
                      (unsigned long long)keep.size(),
                      (unsigned long long)from_file.size(),
                      (unsigned long long)blank);
+        std::vector<std::pair<uint64_t, std::string>> ranked;
+        for (const auto& [name, n] : by_region) ranked.emplace_back(n, name);
+        std::sort(ranked.rbegin(), ranked.rend());
+        for (size_t i = 0; i < ranked.size() && i < 12; i++)
+            std::fprintf(stderr, "save_state:   %8.1f MB  %s\n",
+                         ranked[i].first * Memory::kPageSize / 1048576.0,
+                         ranked[i].second.c_str());
     }
     section(tag("PAGE"));
 

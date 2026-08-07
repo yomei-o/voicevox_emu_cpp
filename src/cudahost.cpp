@@ -400,29 +400,7 @@ int64_t do_launch(x86emu::Emulator& e, uint64_t name_addr, uint64_t args_addr) {
 //
 // Files are kept open across the walk: a 98 MB dictionary is 24000 pages, and
 // opening it 24000 times would take longer than writing the snapshot.
-bool page_matches_file(const x86emu::Memory::Region& r, uint64_t addr,
-                       const uint8_t* data) {
-    constexpr uint64_t kPage = x86emu::Memory::kPageSize;
-    static std::map<std::string, std::FILE*> open_files;
-    auto it = open_files.find(r.file);
-    if (it == open_files.end()) {
-        std::string host = x86emu::FileTable::host_path(r.file);
-        it = open_files.emplace(r.file, std::fopen(host.c_str(), "rb")).first;
-    }
-    std::FILE* f = it->second;
-    if (!f) return false;
-    if (std::fseek(f, static_cast<long>(r.file_offset + (addr - r.base)), SEEK_SET) != 0)
-        return false;
-    uint8_t buf[kPage];
-    if (std::fread(buf, 1, kPage, f) != kPage) return false;
-    return std::memcmp(buf, data, kPage) == 0;
-}
 
-uint64_t fnv1a(const uint8_t* p, size_t n) {
-    uint64_t h = 1469598103934665603ull;
-    for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 1099511628211ull;
-    return h;
-}
 
 // What the shim itself is holding, beside the guest's own state.
 //
@@ -537,84 +515,6 @@ bool read_shim_state(x86emu::Emulator& e, const std::string& path) {
 // The measurement this started as: what a snapshot would weigh, and where the
 // weight is.  Kept because the answer is worth being able to re-check, and
 // because it is the thing that said "most of it is the runtime's own image".
-int64_t weigh_snapshot(x86emu::Emulator& e) {
-    constexpr uint64_t kPage = x86emu::Memory::kPageSize;
-    std::FILE* f = std::tmpfile();
-    if (!f) return -1;
-
-    std::vector<uint64_t> pages = e.mem.live_pages();
-    uint64_t zero = 0, written = 0;
-    std::vector<uint64_t> hashes;
-    hashes.reserve(pages.size());
-    // Where the pages are, by mapping.  A page that is a library's own image
-    // could be re-read from the file on resume rather than carried, and this is
-    // what says whether that is worth the machinery - guessing at it is how you
-    // end up building the wrong half.
-    std::map<std::string, uint64_t> by_region;
-    uint64_t from_file = 0;
-    for (uint64_t index : pages) {
-        const uint8_t* data = e.mem.page_data(index);
-        if (!data) continue;
-        bool all_zero = true;
-        for (uint64_t i = 0; i < kPage && all_zero; i++)
-            if (data[i]) all_zero = false;
-        if (all_zero) {
-            zero++;
-            continue;
-        }
-        uint64_t addr = index * kPage;
-        const x86emu::Memory::Region* home = nullptr;
-        for (const auto& r : e.mem.regions())
-            if (addr >= r.base && addr < r.base + r.size) home = &r;
-        by_region[home ? home->name : std::string("(anonymous)")]++;
-
-        // A page that still matches the file it was mapped from does not have
-        // to be carried: a resume can read it back.  Comparing is exact where a
-        // dirty bit would need the emulator to keep one, and the guest here has
-        // a 98 MB dictionary mapped that it never writes to.
-        if (home && !home->file.empty() && page_matches_file(*home, addr, data)) {
-            from_file++;
-            continue;
-        }
-
-        hashes.push_back(fnv1a(data, kPage));
-        std::fwrite(&index, sizeof index, 1, f);
-        std::fwrite(data, 1, kPage, f);
-        written++;
-    }
-
-    std::vector<std::pair<uint64_t, std::string>> ranked;
-    for (const auto& [name, n] : by_region) ranked.push_back({n, name});
-    std::sort(ranked.rbegin(), ranked.rend());
-    for (size_t i = 0; i < ranked.size() && i < 12; i++)
-        std::fprintf(stderr, "[snap]   %8.1f MB  %s\n",
-                     ranked[i].first * kPage / 1048576.0, ranked[i].second.c_str());
-
-    // Nothing here about the device arena, deliberately.  It used to be written
-    // separately because it was host memory; it is guest memory now, so it came
-    // through the page walk above with everything else - and a resume will get
-    // it back the same way, at the same guest addresses the guest's own
-    // pointers refer to.
-    long total = std::ftell(f);
-    std::fclose(f);
-
-    std::sort(hashes.begin(), hashes.end());
-    uint64_t unique = static_cast<uint64_t>(
-        std::unique(hashes.begin(), hashes.end()) - hashes.begin());
-
-    std::fprintf(stderr,
-                 "[snap] %llu live pages: %llu written, %llu all-zero, %llu still "
-                 "matching their file, %llu of the written distinct\n",
-                 (unsigned long long)pages.size(), (unsigned long long)written,
-                 (unsigned long long)zero, (unsigned long long)from_file,
-                 (unsigned long long)unique);
-    std::fprintf(stderr, "[snap] left behind: %.1f MB of file-backed pages\n",
-                 from_file * kPage / 1048576.0);
-    std::fprintf(stderr, "[snap] %.1f MB raw (device memory included, since it is\n"
-                         "[snap] guest memory now)\n",
-                 total / 1048576.0);
-    return total;
-}
 
 // The whole boundary, timed as one bucket.  What a run costs beyond this is
 // the guest, still interpreted - and on this workload that is now the larger
@@ -682,9 +582,6 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
             std::fprintf(stderr, "[snap] %s, at the next instruction\n", path.c_str());
             return 0;
         }
-        case VVH_WEIGH:
-            return weigh_snapshot(e);
-
         case VVH_MALLOC:
             return static_cast<int64_t>(device_alloc(e, a[0]));
         case VVH_FREE:

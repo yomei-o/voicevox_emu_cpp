@@ -28,7 +28,7 @@ echo "== build the sessions and stop"
 rm -f "$SNAP" "$SNAP.shim" "$OUT/out.wav"
 start=$(date +%s)
 ./vvcudaemu --sysroot "$PWD/sysroot" --env "VVSNAPSHOT=$SNAP" "$OUT/cudavvm" $args 2>&1 |
-    grep -vE "^x86emu: open|^kernel " | tail -6
+    grep -E "^save_state:|^\[snap\]|^ok |^step " | tail -20
 echo "elapsed $(( $(date +%s) - start )) s"
 ls -l "$SNAP" "$SNAP.shim" 2>&1 | sed 's/^/  /'
 

@@ -51,10 +51,10 @@ enum {
     // free list and the descriptor table - beside it as PATH.shim.  Resuming is
     // vvcudaemu's --resume, which is not a host call: it happens before the
     // guest starts.
+    // Taking one also reports where its weight is, by mapping, which is what
+    // the measurement this started as was for.  Two ways of answering one
+    // question is one too many.
     VVH_SNAPSHOT = 16,
-    // () -> bytes a snapshot would come to.  The measurement, kept separate from
-    // taking one: it writes nothing and answers where the weight is.
-    VVH_WEIGH = 17,
 
     // cuDNN.  Descriptors are host objects; the guest only ever holds handles.
     VVH_CUDNN_CREATE_TENSOR = 100,
