@@ -118,6 +118,25 @@ and for "あ": 3 of 3912 against the T4. `web/sample/shim_*.wav` are its output,
 kept beside the T4's and the emulator's. All 377 launches an utterance makes are
 handled natively; nothing falls through to a stub.
 
+**A much longer utterance needs nothing new.** 8.27 seconds of audio instead of
+1.45, and the same 377 launches - the graph is the same and only the tensors are
+bigger. That was worth checking rather than assuming: some of ONNX Runtime's
+kernels are specialised on *size* (`softmax_warp_forward` takes log2 of the
+element count as a template parameter, `_SliceKernel` takes the rank), so a
+longer text could have asked for a specialisation with no entry in the table. It
+matches those by prefix and reads the real counts from the arguments, which is
+why they held. `tools/wsllongcmp.sh`.
+
+Against the native shim on that text the largest difference is **18 of 11421,
+0.158 %** - which is the biggest divergence anywhere in this project, and worth
+saying rather than rounding. It is larger for the ordinary reason: six times the
+audio, so six times as long for the two to drift. And the drift is not in the
+shim, which is the same code in both runs. It is in the nodes ONNX Runtime
+assigns to the *CPU* provider - "Some nodes were not assigned to the preferred
+execution providers", it says on every run - which execute natively in one case
+and under the emulator in the other, where `RSQRTPS` and `RCPPS` are computed
+exactly rather than to hardware's twelve bits.
+
 So the answer to "eight functions and twenty loop shapes" is: yes, that was the
 whole of it. The compute surface is `src/cudnn_real.cpp` (convolution, its
 transpose, bias), `src/cublas_real.cpp` (Sgemm, its batched form, Sgeam) and
