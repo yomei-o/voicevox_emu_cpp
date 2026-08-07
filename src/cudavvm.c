@@ -24,9 +24,23 @@
 
 #include "voicevox_core.h"
 
+// Each step says how long the one before it took.  Module-level profiling puts
+// Open JTalk inside libvoicevox_core, where it is indistinguishable from the
+// decryption and the rest of CORE - and "which phase" separates them without
+// needing to.
+static double now_seconds(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
+
+static double step_started;
+
 static void step(const char* what) {
+    if (step_started > 0) printf("      ... %.1f s\n", now_seconds() - step_started);
     printf("step  %s\n", what);
     fflush(stdout);
+    step_started = now_seconds();
 }
 
 static int check(VoicevoxResultCode r, const char* what) {
