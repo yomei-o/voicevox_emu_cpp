@@ -105,28 +105,44 @@ namespace {
 // ones it was given.
 
 constexpr uint64_t kArenaBase = 0x0000'3000'0000'0000ull;
-constexpr uint64_t kArenaSize = 4ull << 30;  // reserved, not committed
 
 uint8_t* arena_start;
 uint64_t arena_used;
+uint64_t arena_size;
 // Freed blocks, by size, for reuse: ONNX Runtime's own arena allocates a few
 // large blocks and recycles them, so best fit here is nearly always exact.
 std::multimap<uint64_t, uint64_t> arena_free;  // size -> offset
 
 bool arena_init() {
     if (arena_start) return true;
-#if defined(_WIN32)
-    arena_start = static_cast<uint8_t*>(VirtualAlloc(reinterpret_cast<void*>(kArenaBase),
-                                                     kArenaSize, MEM_RESERVE,
-                                                     PAGE_READWRITE));
+#if SIZE_MAX <= 0xFFFFFFFFu
+    // A 32-bit host - WebAssembly - has one linear memory and no address space
+    // to reserve, so the arena is an ordinary allocation and has to be a size
+    // that can actually be committed.  The other reason for the 64-bit version,
+    // putting it where no guest pointer could be mistaken for it, does not
+    // apply either: a guest address here is a synthetic value above
+    // 0x5555'5555'4000 and a 32-bit host pointer cannot reach it.
+    //
+    // 512 MB against the 69 MB the sessions actually take, because the
+    // activations are on top of that and running out is a hard failure.
+    arena_size = 512ull << 20;
+    arena_start = static_cast<uint8_t*>(std::malloc(static_cast<size_t>(arena_size)));
+#elif defined(_WIN32)
+    arena_size = 4ull << 30;  // reserved, not committed
+    arena_start = static_cast<uint8_t*>(
+        VirtualAlloc(reinterpret_cast<void*>(kArenaBase), static_cast<SIZE_T>(arena_size),
+                     MEM_RESERVE, PAGE_READWRITE));
 #else
-    void* p = mmap(reinterpret_cast<void*>(kArenaBase), kArenaSize,
+    arena_size = 4ull << 30;  // reserved, not committed
+    void* p = mmap(reinterpret_cast<void*>(kArenaBase), static_cast<size_t>(arena_size),
                    PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
                    -1, 0);
     arena_start = (p == MAP_FAILED) ? nullptr : static_cast<uint8_t*>(p);
 #endif
     if (!arena_start) {
-        std::fprintf(stderr, "[cuda] cannot reserve the device arena\n");
+        std::fprintf(stderr, "[cuda] cannot reserve %.0f MB for the device arena\n",
+                     arena_size / 1048576.0);
+        arena_size = 0;
         return false;
     }
     return true;
@@ -135,7 +151,7 @@ bool arena_init() {
 bool is_device(uint64_t p) {
     if (!arena_start || !p) return false;
     uint64_t base = reinterpret_cast<uint64_t>(arena_start);
-    return p >= base && p < base + kArenaSize;
+    return p >= base && p < base + arena_size;
 }
 
 uint64_t device_alloc(uint64_t n) {
@@ -147,7 +163,13 @@ uint64_t device_alloc(uint64_t n) {
         arena_free.erase(it);
         return reinterpret_cast<uint64_t>(arena_start) + off;
     }
-    if (arena_used + n > kArenaSize) return 0;
+    if (arena_used + n > arena_size) {
+        std::fprintf(stderr,
+                     "[cuda] the device arena is full: %.0f MB used, %.0f MB asked "
+                     "for, %.0f MB in all\n",
+                     arena_used / 1048576.0, n / 1048576.0, arena_size / 1048576.0);
+        return 0;
+    }
     uint64_t off = arena_used;
     arena_used += n;
 #if defined(_WIN32)
@@ -188,24 +210,29 @@ std::vector<uint8_t> guest_bytes(x86emu::Emulator& e, uint64_t addr, uint64_t le
 // it runs off the end of a mapping, so this stops at the first page it cannot
 // read.
 //
-// Page at a time, not halving.  Halving looks equivalent and is not: an
-// argument that sits eight bytes before the end of the last mapped page would
-// come back as a *four* byte read, and a pointer truncated to its low half is a
-// wrong answer rather than a short one.  Stopping at a page boundary can only
-// truncate an argument that straddles into unmapped memory, which is one the
-// guest could not have written either.
+// Page at a time, and asking first rather than catching a fault.
+//
+// Halving on a fault looks equivalent to this and is not: an argument sitting
+// eight bytes before the end of the last mapped page would come back as a
+// *four* byte read, and a pointer truncated to its low half is a wrong answer
+// rather than a short one.  Stopping at a page boundary can only truncate an
+// argument that straddles into unmapped memory, which is one the guest could
+// not have written either.
+//
+// And asking beats catching.  This runs for every argument of every kernel -
+// nearly two thousand crossings in a run - and a throw is not a cheap way to
+// answer "is that page there", least of all in a WebAssembly build where
+// exceptions go out through JavaScript.  Memory::is_mapped answers it directly.
 uint64_t guest_read_tolerant(x86emu::Emulator& e, uint64_t addr, uint8_t* dst,
                              uint64_t want) {
     constexpr uint64_t kPage = x86emu::Memory::kPageSize;
     uint64_t done = 0;
     while (done < want) {
-        uint64_t n = kPage - ((addr + done) & (kPage - 1));
+        uint64_t at = addr + done;
+        if (!e.mem.is_mapped(at)) break;
+        uint64_t n = kPage - (at & (kPage - 1));
         if (n > want - done) n = want - done;
-        try {
-            e.mem.read(addr + done, dst + done, n);
-        } catch (const x86emu::MemoryFault&) {
-            break;
-        }
+        e.mem.read(at, dst + done, n);
         done += n;
     }
     return done;

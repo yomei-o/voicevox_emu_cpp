@@ -30,7 +30,26 @@ static void js_guest_output(int, const char*, int) {}
 static void js_guest_log(const char*) {}
 #endif
 
+// With VVCUDA_SHIM defined, src/cudahost.cpp is compiled in and the guest's
+// CUDA calls are answered natively - as WebAssembly rather than as interpreted
+// x86.  web/build_cuda.sh is the build that does it; the ordinary one does not,
+// so the demo page is unaffected.
+#ifdef VVCUDA_SHIM
+int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t args);
+#endif
+
 namespace {
+
+// One place to put everything an Emulator needs before it is loaded, so the two
+// entry points below cannot drift apart.
+void prepare(x86emu::Emulator& emu) {
+#ifdef VVCUDA_SHIM
+    emu.on_host_call = vv_host_call;
+#else
+    (void)emu;
+#endif
+}
+
 
 std::string g_error;
 uint64_t g_instructions = 0;
@@ -99,6 +118,7 @@ int emu_run(const uint8_t* data, int len, int trace_calls, double max_insns) {
     g_format.clear();
 
     x86emu::Emulator emu(make_options(trace_calls, max_insns));
+    prepare(emu);
     attach_output(emu);
 
     std::vector<uint8_t> file(data, data + len);
@@ -122,6 +142,7 @@ int emu_run_path(const char* path, const char* argv_data, int argv_len,
     g_format.clear();
 
     x86emu::Emulator emu(make_options(trace_calls, max_insns));
+    prepare(emu);
     attach_output(emu);
 
     std::vector<std::string> argv = split_argv(argv_data, argv_len);
