@@ -118,7 +118,12 @@ project's second session and is already in the vendored copy.
 
 Regression checks that must stay green: the sibling checkout's
 `tests/run_tests.sh` (7/7 here), and `sh tools/check_isa.sh` plus
-`sh tools/check_isa.sh wasm` (303/303 each). `src/isatest.c`, `src/memtest.c`
+`sh tools/check_isa.sh wasm` (303/303 each), and `sh tools/regress_tts.sh`
+- the whole CPU-path pipeline, about seventy minutes, ending bit-identical
+to `web/sample/emu_zundamon.wav`. That last one deletes its output first,
+deliberately: a run that is cut short otherwise leaves the previous one in
+place, and comparing *that* against the reference it was copied from
+reports zero difference and means nothing. It did exactly that once. `src/isatest.c`, `src/memtest.c`
 and `tools/check_isa.sh` belong upstream too - they are emulator tests, not
 voicevox ones.
 

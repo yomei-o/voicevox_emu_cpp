@@ -344,6 +344,9 @@ int64_t do_syscall(Emulator& e, Sys sys, const uint64_t a[6]) {
             }
 
             if (!(flags & kMapAnon) && fd >= 0 && e.files.valid(fd)) {
+                // Where these bytes came from, for anything that later wants to
+                // re-read them rather than carry a copy.
+                e.mem.set_region_file(target, e.files.path_of(fd), offset);
                 int64_t saved = e.files.tell(fd);   // mmap must not disturb the fd
                 if (e.files.seek(fd, static_cast<int64_t>(offset), 0) >= 0) {
                     // A chunk at a time, not the whole segment.  One library

@@ -45,6 +45,12 @@ public:
         uint64_t base;
         uint64_t size;
         std::string name;
+        // For a file mapping, where the bytes came from.  Anything capturing
+        // this address space can then leave out the pages that still match the
+        // file and read them back instead - which for a guest that has mapped a
+        // 98 MB dictionary is most of what it would otherwise carry.
+        std::string file;
+        uint64_t file_offset = 0;
     };
 
     // Makes [addr, addr+size) readable/writable, zero filled.  Pages that are
@@ -137,6 +143,10 @@ public:
     }
 
     const std::vector<Region>& regions() const { return regions_; }
+
+    // Records what a mapping was read from.  Separate from map() because the
+    // syscall knows the file and the allocator does not.
+    void set_region_file(uint64_t base, std::string path, uint64_t offset);
 
     // The pages that have memory behind them, and the bytes of one.  Reserved
     // but untouched pages are not listed: they read as zero, so anything

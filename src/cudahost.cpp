@@ -287,6 +287,28 @@ int64_t do_launch(x86emu::Emulator& e, uint64_t name_addr, uint64_t args_addr) {
 // arena.  On your own disk that is your own process's state; it is not
 // something to publish, and this writes it only when asked by name.
 
+// Does this page still hold what the file it was mapped from holds?
+//
+// Files are kept open across the walk: a 98 MB dictionary is 24000 pages, and
+// opening it 24000 times would take longer than writing the snapshot.
+bool page_matches_file(const x86emu::Memory::Region& r, uint64_t addr,
+                       const uint8_t* data) {
+    constexpr uint64_t kPage = x86emu::Memory::kPageSize;
+    static std::map<std::string, std::FILE*> open_files;
+    auto it = open_files.find(r.file);
+    if (it == open_files.end()) {
+        std::string host = x86emu::FileTable::host_path(r.file);
+        it = open_files.emplace(r.file, std::fopen(host.c_str(), "rb")).first;
+    }
+    std::FILE* f = it->second;
+    if (!f) return false;
+    if (std::fseek(f, static_cast<long>(r.file_offset + (addr - r.base)), SEEK_SET) != 0)
+        return false;
+    uint8_t buf[kPage];
+    if (std::fread(buf, 1, kPage, f) != kPage) return false;
+    return std::memcmp(buf, data, kPage) == 0;
+}
+
 uint64_t fnv1a(const uint8_t* p, size_t n) {
     uint64_t h = 1469598103934665603ull;
     for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 1099511628211ull;
@@ -310,6 +332,7 @@ int64_t write_snapshot(x86emu::Emulator& e, const std::string& path) {
     // what says whether that is worth the machinery - guessing at it is how you
     // end up building the wrong half.
     std::map<std::string, uint64_t> by_region;
+    uint64_t from_file = 0;
     for (uint64_t index : pages) {
         const uint8_t* data = e.mem.page_data(index);
         if (!data) continue;
@@ -321,10 +344,19 @@ int64_t write_snapshot(x86emu::Emulator& e, const std::string& path) {
             continue;
         }
         uint64_t addr = index * kPage;
-        const std::string* where = nullptr;
+        const x86emu::Memory::Region* home = nullptr;
         for (const auto& r : e.mem.regions())
-            if (addr >= r.base && addr < r.base + r.size) where = &r.name;
-        by_region[where ? *where : std::string("(anonymous)")]++;
+            if (addr >= r.base && addr < r.base + r.size) home = &r;
+        by_region[home ? home->name : std::string("(anonymous)")]++;
+
+        // A page that still matches the file it was mapped from does not have
+        // to be carried: a resume can read it back.  Comparing is exact where a
+        // dirty bit would need the emulator to keep one, and the guest here has
+        // a 98 MB dictionary mapped that it never writes to.
+        if (home && !home->file.empty() && page_matches_file(*home, addr, data)) {
+            from_file++;
+            continue;
+        }
 
         hashes.push_back(fnv1a(data, kPage));
         std::fwrite(&index, sizeof index, 1, f);
@@ -352,10 +384,13 @@ int64_t write_snapshot(x86emu::Emulator& e, const std::string& path) {
         std::unique(hashes.begin(), hashes.end()) - hashes.begin());
 
     std::fprintf(stderr,
-                 "[snap] %llu live pages: %llu written, %llu all-zero (skipped), "
-                 "%llu of the written distinct\n",
+                 "[snap] %llu live pages: %llu written, %llu all-zero, %llu still "
+                 "matching their file, %llu of the written distinct\n",
                  (unsigned long long)pages.size(), (unsigned long long)written,
-                 (unsigned long long)zero, (unsigned long long)unique);
+                 (unsigned long long)zero, (unsigned long long)from_file,
+                 (unsigned long long)unique);
+    std::fprintf(stderr, "[snap] left behind: %.1f MB of file-backed pages\n",
+                 from_file * kPage / 1048576.0);
     std::fprintf(stderr, "[snap] guest %.1f MB + arena %.1f MB = %.1f MB raw\n",
                  written * kPage / 1048576.0, arena_bytes / 1048576.0,
                  total / 1048576.0);

@@ -111,6 +111,17 @@ void Memory::write(uint64_t addr, const void* src, uint64_t len) {
     }
 }
 
+void Memory::set_region_file(uint64_t base, std::string path, uint64_t offset) {
+    // The most recent region with this base: mmap appends one per call, and a
+    // MAP_FIXED drop into a reservation makes several with the same name.
+    for (auto it = regions_.rbegin(); it != regions_.rend(); ++it)
+        if (it->base == base) {
+            it->file = std::move(path);
+            it->file_offset = offset;
+            return;
+        }
+}
+
 std::vector<uint64_t> Memory::live_pages() const {
     std::vector<uint64_t> out;
     out.reserve(pages_.size());
