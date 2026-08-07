@@ -102,6 +102,22 @@ packages, so a Windows machine builds and runs an x86-64 Linux guest. (Where WSL
 *is* available its gcc builds the guests directly, which is simpler than the
 clang cross-compile, and `qemu-x86_64` there makes an excellent reference.)
 
+## Synthesis in seconds
+
+Needs the CUDA build of `voicevox_onnxruntime` (which this repository does not
+carry) and a Linux host or WSL. See [CUDA_SHIM.md](CUDA_SHIM.md) for what it is
+and what it measures.
+
+    sh tools/slim_provider.sh <providers_cuda.so>   # 440 MB -> 9.3 MB gzipped
+    MODE=guest sh tools/make_cuda_stubs.sh <lib dir>
+    sh build_cudaemu.sh                             # the emulator + the shim
+    sh tools/wslrun_cuda.sh                         # and a WAV, in seconds
+
+`MODE=native` on the same generator builds a shim that does the arithmetic in
+the calling process instead, which is the one to debug against: it runs in a
+second, and `sh tools/check_shim.sh` holds it to sixteen reference values that
+a Tesla T4 and a desktop CPU both produce.
+
 ## The drop-in API
 
     sh build_api.sh      # guest/vvagent and voicevox_core.dll
