@@ -32,7 +32,9 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -260,12 +262,17 @@ int main(int argc, char** argv) {
     if (argc < 3) {
         std::fprintf(stderr,
                      "usage: vvmload <voicevox_onnxruntime library> <model.vvm> "
-                     "[predict_duration|predict_intonation|decode]\n");
+                     "[predict_duration|predict_intonation|decode] [opt-level]\n"
+                     "  opt-level: ORT's graph optimization, 0 none 1 basic "
+                     "2 extended 99 all; left alone if absent\n");
         return 2;
     }
     const std::string runtime = argv[1];
     const std::string vvm = argv[2];
     const std::string which = argc > 3 ? argv[3] : "predict_duration";
+    // ORT's GraphOptimizationLevel: 0 disables all, 1 basic, 2 extended, 99 all.
+    // Left alone unless asked, so the default run is the runtime's own default.
+    const int opt_level = argc > 4 ? std::atoi(argv[4]) : -1;
 
     // ---- the runtime -------------------------------------------------------
     // dlopen rather than linking, because there is more than one build of it -
@@ -324,6 +331,20 @@ int main(int argc, char** argv) {
     OrtSessionOptions* so = nullptr;
     if (fail("CreateSessionOptions", g_api->CreateSessionOptions(&so))) return 1;
 
+    // Building a session from a 58 MB model takes 192 seconds under the
+    // emulator, and the time is proportional to the bytes rather than to the
+    // graph - but "proportional to the bytes" covers decrypting them, parsing
+    // them and copying the weights out, all three.  Turning the graph
+    // optimiser off separates one of those from the other two: it still
+    // decrypts and still parses.
+    if (opt_level >= 0) {
+        std::printf("step  graph optimization level %d\n", opt_level);
+        if (fail("SetSessionGraphOptimizationLevel",
+                 g_api->SetSessionGraphOptimizationLevel(
+                     so, static_cast<GraphOptimizationLevel>(opt_level))))
+            return 1;
+    }
+
     // This is the whole of it.  Without the entry the runtime sees a payload it
     // does not recognise as ONNX and refuses it; with it, it decrypts the
     // payload itself before parsing.  The caller never holds plaintext.
@@ -332,12 +353,21 @@ int main(int argc, char** argv) {
              g_api->AddSessionConfigEntry(so, "session.use_vv_bin", "1")))
         return 1;
 
+    // Timed, because "decrypt it and build a session from it" is one call doing
+    // two jobs.  The three models in a .vvm differ by three orders of magnitude
+    // in size - 52 KB, 30 KB, 58 MB - so whether this scales with the bytes or
+    // with the graph says which of the two the time is going to.
     std::printf("step  CreateSessionFromArray  <- the runtime decrypts, inside itself\n");
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     OrtSession* session = nullptr;
     if (fail("CreateSessionFromArray",
              g_api->CreateSessionFromArray(env, model.data(), model.size(), so, &session)))
         return 1;
-    std::printf("ok    session built\n");
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double took = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+    std::printf("ok    session built in %.2f s  (%zu bytes, %.0f bytes/s)\n", took,
+                model.size(), took > 0 ? model.size() / took : 0.0);
 
     OrtAllocator* alloc = nullptr;
     discard(g_api->GetAllocatorWithDefaultOptions(&alloc));
