@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -269,6 +270,80 @@ int64_t do_launch(x86emu::Emulator& e, uint64_t name_addr, uint64_t args_addr) {
     return vvstub_run_kernel(name.c_str(), host_args.data()) ? 1 : 0;
 }
 
+// ---------------------------------------------------------------------------
+// Capturing the state, to find out what a resume would cost
+//
+// Building the sessions takes minutes and synthesising takes seconds, so the
+// obvious thing to want is to do the first once and start from there.  Whether
+// that is *practical* turns on a number nobody has: how big is the state, and
+// how much of it compresses.
+//
+// This writes it; restoring is the other half and is not written.  What goes in
+// is every guest page with memory behind it - a reserved but untouched page
+// reads as zero and can be left out - plus the device arena, because the guest
+// is by now full of pointers into it.
+//
+// The file contains the decrypted voice model, in guest memory and again in the
+// arena.  On your own disk that is your own process's state; it is not
+// something to publish, and this writes it only when asked by name.
+
+uint64_t fnv1a(const uint8_t* p, size_t n) {
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 1099511628211ull;
+    return h;
+}
+
+int64_t write_snapshot(x86emu::Emulator& e, const std::string& path) {
+    constexpr uint64_t kPage = x86emu::Memory::kPageSize;
+    std::FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) {
+        std::fprintf(stderr, "[snap] cannot write %s\n", path.c_str());
+        return -1;
+    }
+
+    std::vector<uint64_t> pages = e.mem.live_pages();
+    uint64_t zero = 0, written = 0;
+    std::vector<uint64_t> hashes;
+    hashes.reserve(pages.size());
+    for (uint64_t index : pages) {
+        const uint8_t* data = e.mem.page_data(index);
+        if (!data) continue;
+        bool all_zero = true;
+        for (uint64_t i = 0; i < kPage && all_zero; i++)
+            if (data[i]) all_zero = false;
+        if (all_zero) {
+            zero++;
+            continue;
+        }
+        hashes.push_back(fnv1a(data, kPage));
+        std::fwrite(&index, sizeof index, 1, f);
+        std::fwrite(data, 1, kPage, f);
+        written++;
+    }
+
+    // The arena, up to the high-water mark.  Its address is fixed, so a resume
+    // can put it back where the guest's pointers expect it.
+    uint64_t arena_bytes = arena_start ? arena_used : 0;
+    std::fwrite(&arena_bytes, sizeof arena_bytes, 1, f);
+    if (arena_bytes) std::fwrite(arena_start, 1, arena_bytes, f);
+    long total = std::ftell(f);
+    std::fclose(f);
+
+    std::sort(hashes.begin(), hashes.end());
+    uint64_t unique = static_cast<uint64_t>(
+        std::unique(hashes.begin(), hashes.end()) - hashes.begin());
+
+    std::fprintf(stderr,
+                 "[snap] %llu live pages: %llu written, %llu all-zero (skipped), "
+                 "%llu of the written distinct\n",
+                 (unsigned long long)pages.size(), (unsigned long long)written,
+                 (unsigned long long)zero, (unsigned long long)unique);
+    std::fprintf(stderr, "[snap] guest %.1f MB + arena %.1f MB = %.1f MB raw\n",
+                 written * kPage / 1048576.0, arena_bytes / 1048576.0,
+                 total / 1048576.0);
+    return total;
+}
+
 // The whole boundary, timed as one bucket.  What a run costs beyond this is
 // the guest, still interpreted - and on this workload that is now the larger
 // half, which was not true before.
@@ -306,6 +381,9 @@ int64_t vv_host_call(x86emu::Emulator& e, uint64_t id, uint64_t argp) {
     switch (id) {
         case VVH_ALIVE:
             return 1;
+
+        case VVH_SNAPSHOT:
+            return write_snapshot(e, e.mem.read_cstring(a[0]));
 
         case VVH_MALLOC: {
             uint64_t p = device_alloc(a[0]);

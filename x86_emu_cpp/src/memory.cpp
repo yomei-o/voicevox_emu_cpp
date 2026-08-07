@@ -1,5 +1,6 @@
 #include "memory.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 
@@ -108,6 +109,20 @@ void Memory::write(uint64_t addr, const void* src, uint64_t len) {
         addr += n;
         len -= n;
     }
+}
+
+std::vector<uint64_t> Memory::live_pages() const {
+    std::vector<uint64_t> out;
+    out.reserve(pages_.size());
+    for (const auto& [index, page] : pages_)
+        if (page) out.push_back(index);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+const uint8_t* Memory::page_data(uint64_t index) const {
+    auto it = pages_.find(index);
+    return (it == pages_.end() || !it->second) ? nullptr : it->second->data();
 }
 
 std::string Memory::read_cstring(uint64_t addr, uint64_t max_len) const {

@@ -138,6 +138,13 @@ public:
 
     const std::vector<Region>& regions() const { return regions_; }
 
+    // The pages that have memory behind them, and the bytes of one.  Reserved
+    // but untouched pages are not listed: they read as zero, so anything
+    // capturing this address space can leave them out and get them back for
+    // free.  Sorted, so a capture is reproducible.
+    std::vector<uint64_t> live_pages() const;
+    const uint8_t* page_data(uint64_t index) const;
+
 private:
     using Page = std::array<uint8_t, kPageSize>;
 

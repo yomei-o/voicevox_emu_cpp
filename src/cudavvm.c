@@ -20,6 +20,8 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "vvhostcall.h"
+
 #include "voicevox_core.h"
 
 static void step(const char* what) {
@@ -87,6 +89,19 @@ int main(int argc, char** argv) {
 
     // Everything above only builds sessions.  The kernels of interest launch
     // here, and the ones from the vocoder are the ones that matter.
+    // VVSNAPSHOT=<path>: dump the emulator's state here, now, with the sessions
+    // built and before a single kernel has launched.  That is the point a
+    // resume would start from, so it is the point worth measuring.  Outside the
+    // emulator the syscall answers ENOSYS and nothing happens.
+    {
+        const char* snap = getenv("VVSNAPSHOT");
+        if (snap) {
+            long a[VVHOST_SLOTS] = {(long)snap};
+            long n = vvhost(VVH_SNAPSHOT, a);
+            printf("      snapshot %ld bytes -> %s\n", n, snap);
+        }
+    }
+
     step("voicevox_synthesizer_tts  <- every kernel the pipeline uses");
     // `@path` reads the text from a file.  Passing it as an argument works on
     // Linux and does not survive the trip through a Windows command line: the
