@@ -174,6 +174,20 @@ arithmetic natively with Eigen. ONNX Runtime registers 4757 kernels; an utteranc
 launches 43, in 20 loop shapes, plus eight library functions that compute.
 Filling those in gets the T4's own output to within 2 samples of 12988.
 
+**And that is what makes synthesis fast under the emulator.** The same binary,
+run twice - once with the arithmetic interpreted like everything else, once with
+it handed to the host through one reserved syscall:
+
+| "あ", 0.52 s of audio | synthesis | against the T4 |
+| --- | --- | --- |
+| everything interpreted | 3476 s (58 minutes) | 3 of 3912 |
+| the arithmetic on the host | **5 s** | 3 of 3912 |
+
+Seven hundred times, for the same answer. It costs nothing to move the tensors
+because they never move: a CUDA device pointer is not host memory and nothing in
+ONNX Runtime may dereference one, so device memory can simply *be* host memory.
+Over a whole utterance the boundary crossings - 1983 of them - come to 0.06 s.
+
 Two things make the gap that large. The interpreter retires tens of millions of
 instructions a second where the machine does billions; and CPUID here advertises
 SSE2 only, so ORT's kernels take their slowest path — which is also true of qemu,

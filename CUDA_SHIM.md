@@ -234,7 +234,17 @@ ok    load_voice_model
       within 8 of 12988 of the Tesla T4
 ```
 
-The same utterance through the CPU build, interpreted, is **hours**.
+And the before-and-after is not an estimate. The *same binary* was run twice —
+once with the arithmetic interpreted like everything else, once with it on the
+host side of the syscall — and both produce the same audio:
+
+| "あ", 0.52 s of audio | synthesis | against the T4 |
+| --- | --- | --- |
+| the shim's arithmetic interpreted too | **3476 s** (58 minutes) | 3 of 3912 |
+| the shim on the host | **5 s** | 3 of 3912 |
+
+Seven hundred times, for the same answer. The CPU build, interpreted, is hours
+as well - this project has been saying so since the browser demo shipped.
 
 ### Why it costs nothing to move the tensors
 
