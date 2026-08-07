@@ -274,14 +274,30 @@ design was right about that.
 
 Building the sessions — decrypting the model and constructing every graph —
 takes **6 minutes 37 seconds**, all of it interpreted, against about a second
-natively. That is now the whole cost of a run, and none of it is arithmetic:
-it is ONNX Runtime's graph construction and VOICEVOX's decryption, which the
-shim does not touch and should not.
+natively. That is now the whole cost of a run.
 
-So the shape of the problem has inverted. It used to be "the vocoder takes
-hours". It is now "the vocoder takes seconds and the setup takes minutes",
-which is a different job — a JIT, or caching a built session, rather than
-anything to do with CUDA.
+`X86EMU_PROFILE=100000` says where it goes. A complete run — load, session
+build, and synthesis of "あ" — is **7.8 G instructions**, and they fall out
+like this:
+
+| | |
+| --- | --- |
+| `libvoicevox_onnxruntime.so.1.17.3` | **83.2 %** |
+| `libvoicevox_core.so` | 12.0 % |
+| `libc.so.6` | 3.5 % |
+| `libstdc++.so.6` | 1.2 % |
+| everything else | 0.1 % |
+
+That kills a plausible idea before it was built. For an ELF guest the *real*
+glibc runs interpreted — the emulator's library hooks are only reached through
+PE imports — so hooking `memcpy`, `malloc` and friends natively looked like it
+might be worth a lot. It is worth at most three and a half per cent. The cost is
+ONNX Runtime's own code building graphs, and VOICEVOX's core decrypting, and
+neither has a seam.
+
+So the shape of the problem has inverted, and the remaining job is the one this
+project already named: **a JIT**, or caching a built session. Nothing to do with
+CUDA, and nothing a hook can reach.
 
 ## Could this make the browser demo bearable?
 
@@ -312,14 +328,18 @@ still launches 377, and still makes audio within 2 of 12988 of the T4:
 
     440 MB  ->  9.3 MB gzipped
 
-**Would it be fast? On the desktop, yes — measured, not estimated.** Synthesis
-is 7 seconds under the emulator where the interpreted path is hours. In a
-browser the arithmetic would be compiled WebAssembly rather than native, so call
-it two to three times that; the setup is the part that does not improve, and at
-the browser's ~6 M instructions a second the 6m37s measured here is worse
-again. So: **minutes, dominated by session building, with the synthesis itself
-no longer the problem.** That is a different demo from the one that costs
-hours, and a different remaining job — one about graph construction, not CUDA.
+**Would it be fast? On the desktop, yes. In a tab, about twenty minutes.**
+Synthesis is 7 seconds under the emulator where the interpreted path is hours.
+For the browser the arithmetic is no longer the question at all - the profile
+above says a complete run is 7.8 G instructions, and a browser retires about six
+million a second, which is **twenty-odd minutes and almost all of it session
+building**.
+
+That is worth stating plainly because it is not the answer the shim was hoped to
+give. It takes the demo from "hours, and the page says so" to "twenty minutes",
+which is better and is still not interactive. Getting further means making the
+interpreter faster, not moving more arithmetic out of it - there is barely any
+left to move.
 
 **Does it fit in a tab? Closer, and still not the whole story.** Pages are
 reserved rather than allocated now, a whole page of zeros written over a page

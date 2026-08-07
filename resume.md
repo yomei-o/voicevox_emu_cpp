@@ -137,6 +137,13 @@ this project spent a day explaining. `EMU=` still overrides.
    there is not arithmetic at all: building the sessions takes 6 m 37 s, all of
    it interpreted, and that is now the whole cost of a run.
 
+   `X86EMU_PROFILE=100000` says where those instructions go, and it closes off
+   one idea before anyone builds it. A complete run is 7.8 G instructions:
+   **83 % ONNX Runtime, 12 % libvoicevox_core, 3.5 % libc, 1.2 % libstdc++.**
+   For an ELF guest the real glibc runs interpreted - the library hooks below
+   are only reached through PE imports - so hooking `memcpy` and `malloc`
+   natively looked worth a lot. It is worth at most three and a half per cent.
+
 1. **Speed.** This is the whole story for the CPU path. The interpreter retires
    tens of millions of instructions a second; ORT wants billions.
 
