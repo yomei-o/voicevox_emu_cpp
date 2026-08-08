@@ -62,3 +62,11 @@ sysroot/lib/x86_64-linux-gnu/libcublas*.so.*
 # tools/wslresume.sh writes one; VVSNAP says where.
 *.state
 *.state.shim
+
+# Emulator builds kept only to be measured against each other:
+# tools/wslbuildpresync.sh makes .presync, tools/wslcudaab.sh reads both.
+vvcudaemu.before
+vvcudaemu.presync
+# A second CMake tree, so a build can happen while the first one is running a
+# seventy-minute job and Windows will not let its .exe be replaced.
+x86_emu_cpp/build2/

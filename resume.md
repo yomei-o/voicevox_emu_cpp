@@ -116,6 +116,34 @@ everything was not in ONNX Runtime, it was in *our own* libcudart stand-in.
 `statx` (syscall 332) landed in `syscalls.cpp` / `syscalls_files.inc` before this
 project's second session and is already in the vendored copy.
 
+And a third round, this time coming the *other* way - written upstream while
+building `gcc_emu_cpp`, and vendored back in here:
+
+| file | what |
+| --- | --- |
+| `src/cpu.{h,cpp}` | the hook range starts empty (`low > high`) and the diagnostics sit behind one `watching_` flag, so a run that asks for neither pays for neither. **2.6x** on the gcc workload |
+| `src/syscalls.cpp` | `ioctl` answers TCGETS and TIOCGWINSZ for fds 0-2, so musl's `isatty` gets a straight answer and stdout stops being block-buffered. Output appears while a program runs instead of at the end |
+| `src/emulator.cpp` | a program is opened through the sysroot |
+
+The termios one has a trap in it: the kernel's `struct termios` is **36 bytes**
+and glibc's is 60. Writing 60 into a guest's 36-byte buffer smashed its stack,
+and the failure looked like the guest's fault.
+
+`-fwasm-exceptions`, not `-sDISABLE_EXCEPTION_CATCHING=0`, in all three
+emscripten builds here (`web/build.sh`, `web/build_cuda.sh`,
+`tools/wslwasmdebug.sh`). Both let a throw be caught; the second does it by
+routing every call through a JavaScript trampoline, which on the same
+interpreter loop in `gcc_emu_cpp` measured **5x**. What it costs *here* is
+being measured - this path spends most of its time in guest code, so the share
+is not the same.
+
+**Never run one of these through `| tail`.** Both the regression and the test
+suite print their verdict at the end and their *evidence* in the middle, and a
+tail keeps the verdict and throws away the reason. `tests/run_tests.sh` came
+back "9 passed, 1 failed" with the name of the failure already discarded, and a
+seventy-minute regression was cut short with nothing on the pipe at all, which
+was then diagnosed as a crash. Redirect to a file and read the file.
+
 Regression checks that must stay green: the sibling checkout's
 `tests/run_tests.sh` (7/7 here), and `sh tools/check_isa.sh` plus
 `sh tools/check_isa.sh wasm` (303/303 each), and `sh tools/regress_tts.sh`
@@ -166,8 +194,35 @@ this project spent a day explaining. `EMU=` still overrides.
    should look at the decode/execute switch and the operand helpers, or accept
    that the answer is a JIT.
 
-   Untried and still plausible: an instruction-fetch cursor so decoding does not
-   re-resolve the code page for every byte.
+   The instruction-fetch cursor is now **done**, and it is worth about three
+   per cent. `ip_`/`ip_end_` in `cpu.h` hold the current code page; the cursor
+   is dropped at the top of every `step()`, so one page lookup per instruction
+   replaces one per byte. It is dropped rather than maintained because every
+   jump, call and return assigns `rip` directly, and a cursor that tried to
+   survive those would have to be invalidated in each of them.
+
+   Measured on the CUDA path, interleaved, `tools/wslcudaab.sh` - session build,
+   which is the whole cost of a CUDA run:
+
+   | build | session build | tts |
+   | --- | --- | --- |
+   | before today's upstream sync | 237, 239 (238 avg) | 5 s |
+   | synced, no cursor | 221, 227, 216, 214, 215 (218.6) | 5 s |
+   | synced + cursor | 210, 214, 211, 208, 215 (211.6) | 5 s |
+
+   So the sync is -8 %, the cursor another -3.2 %, and the audio out of the
+   cursor build is **bit-identical** to the one before it. Every one of the five
+   paired rounds has the cursor at or below its partner, but one pair is dead
+   level, so treat three per cent as the size of it and not four.
+
+   Two things worth saying about those numbers. The 2.6x that the same sync was
+   worth on `gcc_emu_cpp` did **not** arrive here - eight per cent did. That is
+   the profile talking: 83 % of these instructions are ONNX Runtime's SSE
+   arithmetic, where the per-instruction overhead the sync removed is a much
+   smaller share of the work than it is in a compiler. And 238 s is not the
+   6 m 37 s recorded above; that figure was measured on another day under
+   conditions this one has not reproduced, so compare within this table, not
+   across.
 2. **CPUID says SSE2 only.** SSSE3 and SSE4.1 are now *implemented* and checked
    (isatest, 303 groups, native and wasm both matching a real CPU and qemu), so
    advertising them is a two-line change rather than a project. It was tried and

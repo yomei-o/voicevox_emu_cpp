@@ -1026,26 +1026,49 @@ void Cpu::unsupported(const char* what, uint8_t opcode, uint64_t start_rip) {
     throw CpuError(start_rip, buf);
 }
 
+// The census is decided by the environment before any Cpu exists, so it is
+// folded into `watching_` here rather than tested per instruction.
+Cpu::Cpu(Memory& mem, Mode mode) : mem_(mem), mode_(mode) {
+    if (g_census) watching_ = true;
+}
+
 void Cpu::step() {
     // A hook address is not real code: hand control to the host implementation.
-    if (on_hook_call && on_hook_call(rip)) {
+    // The range check is here rather than inside the callback, because the
+    // callback is a std::function and calling one to be told "not mine" is the
+    // most expensive way to ask.
+    if (rip >= hook_low && rip <= hook_high && on_hook_call && on_hook_call(rip)) {
         ++instructions_executed;
         return;
     }
 
     uint64_t start = rip;
     g_watch_rip = start;
-    if (--profile_countdown_ == 0) {
-        profile_countdown_ = profile_every_ ? profile_every_ : ~0ull;
-        if (profile_every_) profile_samples_.push_back(start);
-    }
-    if (g_census) g_census->record(start);
-    if (!history_.empty()) {
-        history_[history_pos_] = start;
-        history_pos_ = (history_pos_ + 1) % history_.size();
-        if (history_filled_ < history_.size()) ++history_filled_;
+
+    // The diagnostics, behind one test.
+    //
+    // Profiling, the census and the instruction history are all off in an
+    // ordinary run, and each was costing a branch and a load per instruction to
+    // establish that.  `watching_` is set when any of them is turned on, so the
+    // common case is one predictable comparison.
+    if (watching_) {
+        if (--profile_countdown_ == 0) {
+            profile_countdown_ = profile_every_ ? profile_every_ : ~0ull;
+            if (profile_every_) profile_samples_.push_back(start);
+        }
+        if (g_census) g_census->record(start);
+        if (!history_.empty()) {
+            history_[history_pos_] = start;
+            history_pos_ = (history_pos_ + 1) % history_.size();
+            if (history_filled_ < history_.size()) ++history_filled_;
+        }
     }
     pfx_ = Prefixes{};
+    // The code cursor belongs to one instruction.  Everything that changes rip
+    // without fetching - every jump, call, return and signal return - happens
+    // between instructions, so dropping it here is the whole of keeping it
+    // honest.
+    code_drop();
 
     // Prefix bytes.  Segment overrides other than fs:/gs: are accepted and
     // ignored, because the loaders set up a flat address space.
@@ -1056,7 +1079,7 @@ void Cpu::step() {
     // "no prefix at all" was the tenth.
     bool more_prefixes = true;
     while (more_prefixes) {
-        uint8_t b = mem_.read8(rip);
+        uint8_t b = peek8();
         switch (b) {
             case 0x40: case 0x41: case 0x42: case 0x43:
             case 0x44: case 0x45: case 0x46: case 0x47:
@@ -1072,18 +1095,18 @@ void Cpu::step() {
                 pfx_.rex_r = (b & 4) != 0;
                 pfx_.rex_x = (b & 2) != 0;
                 pfx_.rex_b = (b & 1) != 0;
-                ++rip;
+                skip8();
                 more_prefixes = false;  // REX must be the last prefix
                 break;
-            case 0x66: pfx_.opsize16 = true; ++rip; break;
-            case 0x67: pfx_.addr_override = true; ++rip; break;
-            case 0xF0: pfx_.lock = true; ++rip; break;
-            case 0xF2: pfx_.repne = true; ++rip; break;
-            case 0xF3: pfx_.rep = true; ++rip; break;
-            case 0x64: pfx_.seg_base = fs_base; pfx_.seg_override = true; ++rip; break;
-            case 0x65: pfx_.seg_base = gs_base; pfx_.seg_override = true; ++rip; break;
+            case 0x66: pfx_.opsize16 = true; skip8(); break;
+            case 0x67: pfx_.addr_override = true; skip8(); break;
+            case 0xF0: pfx_.lock = true; skip8(); break;
+            case 0xF2: pfx_.repne = true; skip8(); break;
+            case 0xF3: pfx_.rep = true; skip8(); break;
+            case 0x64: pfx_.seg_base = fs_base; pfx_.seg_override = true; skip8(); break;
+            case 0x65: pfx_.seg_base = gs_base; pfx_.seg_override = true; skip8(); break;
             // cs:/ss:/ds:/es: - all zero based here
-            case 0x2E: case 0x36: case 0x3E: case 0x26: ++rip; break;
+            case 0x2E: case 0x36: case 0x3E: case 0x26: skip8(); break;
             default: more_prefixes = false; break;
         }
     }

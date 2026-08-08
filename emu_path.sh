@@ -20,3 +20,17 @@ case "$EMU" in
     ../*) echo "emulator: $EMU  (the sibling checkout - does it have this project's fixes?)" ;;
     *) echo "emulator: $EMU" ;;
 esac
+
+# Older than the sources it was built from?
+#
+# Printing the path was supposed to be enough and is not: the path is right and
+# the binary behind it is a week old.  A seventy-minute regression ran twice
+# against an emulator built before the day's changes, and reported on none of
+# them.  Nothing about that run looked wrong.
+newer=$(find x86_emu_cpp/src -newer "$EMU" -name '*.cpp' -o -newer "$EMU" -name '*.h' 2>/dev/null | head -3)
+if [ -n "$newer" ]; then
+    echo "  STALE: these are newer than the emulator -"
+    printf '    %s\n' $newer
+    echo "  rebuild it (cmake --build x86_emu_cpp/build --config Release), or set EMU= on purpose."
+    exit 1
+fi

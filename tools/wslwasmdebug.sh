@@ -35,7 +35,7 @@ echo "== building web/x86emu_cuda_dbg.js"
     -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sSTACK_SIZE=8MB \
     -sEXPORTED_FUNCTIONS='["_emu_run","_emu_run_path","_emu_set_sysroot","_emu_setenv","_emu_error","_emu_format","_emu_instructions","_malloc","_free"]' \
     -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","HEAPU8","FS","ENV"]' \
-    -sFORCE_FILESYSTEM=1 -sDISABLE_EXCEPTION_CATCHING=0 \
+    -sFORCE_FILESYSTEM=1 -fwasm-exceptions \
     -sENVIRONMENT=node,web,worker --no-entry
 
 echo "== running"

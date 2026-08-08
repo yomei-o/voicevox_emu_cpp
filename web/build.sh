@@ -27,6 +27,12 @@ SOURCES=$(ls x86_emu_cpp/src/*.cpp | grep -v '/main\.cpp$')
 
 # A 58 MB model, a 100 MB dictionary and an 18 MB runtime all live in the guest
 # at once, so the heap has to be allowed to grow well past the default.
+#
+# -fwasm-exceptions, not -sDISABLE_EXCEPTION_CATCHING=0.  Both let a throw be
+# caught; the second does it by compiling every call into a JavaScript trampoline
+# that can unwind, which in gcc_emu_cpp - the same emulator, measured - cost 5x
+# on the interpreter loop.  The first uses the wasm exception instructions and
+# costs nothing until something actually throws.
 $EMXX -std=c++17 -O3 -Ix86_emu_cpp/src \
     $SOURCES web/wasm_api.cpp \
     -o web/x86emu.js \
@@ -39,7 +45,7 @@ $EMXX -std=c++17 -O3 -Ix86_emu_cpp/src \
     -sEXPORTED_FUNCTIONS='["_emu_run","_emu_run_path","_emu_set_sysroot","_emu_setenv","_emu_guest_setenv","_emu_error","_emu_format","_emu_instructions","_malloc","_free"]' \
     -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","HEAPU8","FS"]' \
     -sFORCE_FILESYSTEM=1 \
-    -sDISABLE_EXCEPTION_CATCHING=0 \
+    -fwasm-exceptions \
     -sENVIRONMENT=web,worker,node \
     --no-entry
 

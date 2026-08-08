@@ -53,7 +53,7 @@ $EMXX -std=c++17 -O3 -msimd128 -DVVCUDA_SHIM \
     -sEXPORTED_FUNCTIONS='["_emu_run","_emu_run_path","_emu_resume_path","_emu_set_sysroot","_emu_setenv","_emu_guest_setenv","_emu_error","_emu_format","_emu_instructions","_malloc","_free"]' \
     -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","HEAPU8","FS","ENV"]' \
     -sFORCE_FILESYSTEM=1 \
-    -sDISABLE_EXCEPTION_CATCHING=0 \
+    -fwasm-exceptions \
     -sENVIRONMENT=node,web,worker \
     --no-entry
 

@@ -74,7 +74,7 @@ enum : uint64_t {
 
 class Cpu {
 public:
-    Cpu(Memory& mem, Mode mode) : mem_(mem), mode_(mode) {}
+    Cpu(Memory& mem, Mode mode);
 
     // A 128-bit SSE register, viewed as whatever the current instruction needs.
     union Xmm {
@@ -119,6 +119,15 @@ public:
     // hook the callback performs the whole call, including the return, and
     // returns true.
     std::function<bool(uint64_t /*addr*/)> on_hook_call;
+    // The address range on_hook_call answers for, so that step() can decide
+    // whether to call it without calling it.
+    //
+    // This runs before every instruction the guest executes, and the first thing
+    // the callback did was compare the address against these two numbers and
+    // return false - so a std::function's indirect call was being paid, tens of
+    // millions of times a second, to be told no.  Set by whoever installs the
+    // callback; left empty, the callback is asked about everything as before.
+    uint64_t hook_low = 1, hook_high = 0;   // empty: low > high
 
     // `int n` (Linux int 0x80) and the `syscall` instruction.
     std::function<void(uint8_t /*vector*/)> on_interrupt;
@@ -135,6 +144,7 @@ public:
         history_.assign(entries, 0);
         history_pos_ = 0;
         history_filled_ = 0;
+        watching_ = true;
     }
     size_t history_size() const { return history_.size(); }
 
@@ -144,11 +154,12 @@ public:
     // is usually the whole answer - especially now that a file mapping is named
     // after its file.
     //
-    // The cost when it is off is one decrement and a not-taken branch, which is
-    // less than the hook check already sitting in the same path.
+    // Off, it costs nothing at all now: step() tests `watching_` once and skips
+    // this, the census and the history together.
     void enable_profile(uint64_t every) {
         profile_every_ = every;
         profile_countdown_ = every ? every : ~0ull;
+        if (every) watching_ = true;
     }
     bool profiling() const { return profile_every_ != 0; }
     std::string profile_report() const;
@@ -211,22 +222,61 @@ private:
     };
 
     // ---- instruction stream ---------------------------------------------
-    uint8_t fetch8() { return mem_.read8(rip++); }
-    uint16_t fetch16() {
-        uint16_t v = mem_.read16(rip);
-        rip += 2;
+    //
+    // A cursor into the current code page, so that decoding one instruction
+    // resolves that page once instead of once per byte.  `ip_` is the host
+    // address of `rip`; `ip_end_` is where the page runs out.
+    //
+    // It is dropped at the top of every instruction, which is what makes it
+    // safe: `rip` is assigned directly by every jump, call and return, and a
+    // cursor that tried to survive those would have to be invalidated in each
+    // of them.  Paying one page lookup per instruction to not have that
+    // obligation is the trade - the byte-by-byte lookups are the cost worth
+    // removing, not this one.
+    const uint8_t* ip_ = nullptr;
+    const uint8_t* ip_end_ = nullptr;
+
+    void code_drop() { ip_ = ip_end_ = nullptr; }
+
+    // The next byte, without consuming it, and `skip8` to consume one that
+    // `peek8` has already resolved.  The prefix loop needs both: it has to see
+    // a byte before it knows whether the byte is its business.
+    uint8_t peek8() {
+        if (ip_ < ip_end_) return *ip_;
+        ip_ = mem_.code_window(rip, &ip_end_);
+        return *ip_;
+    }
+    void skip8() { ++rip; ++ip_; }
+
+    uint8_t fetch8() {
+        if (ip_ < ip_end_) { ++rip; return *ip_++; }
+        return fetch8_slow();
+    }
+    uint8_t fetch8_slow() {
+        ip_ = mem_.code_window(rip, &ip_end_);
+        ++rip;
+        return *ip_++;
+    }
+    // 2, 4 and 8 byte reads take the cursor only when the whole value is on
+    // this page.  Straddling one is rare enough not to be worth splitting, and
+    // the fallback drops the cursor because `rip` has moved past what it
+    // describes.
+    template <typename T>
+    T fetch_wide() {
+        T v;
+        if (static_cast<uint64_t>(ip_end_ - ip_) >= sizeof(T)) {
+            std::memcpy(&v, ip_, sizeof(T));
+            ip_ += sizeof(T);
+        } else {
+            v = static_cast<T>(mem_.read_sized(rip, sizeof(T)));
+            code_drop();
+        }
+        rip += sizeof(T);
         return v;
     }
-    uint32_t fetch32() {
-        uint32_t v = mem_.read32(rip);
-        rip += 4;
-        return v;
-    }
-    uint64_t fetch64() {
-        uint64_t v = mem_.read64(rip);
-        rip += 8;
-        return v;
-    }
+    uint16_t fetch16() { return fetch_wide<uint16_t>(); }
+    uint32_t fetch32() { return fetch_wide<uint32_t>(); }
+    uint64_t fetch64() { return fetch_wide<uint64_t>(); }
     // Immediate for an operand of `size` bytes.  A 64-bit operand still takes
     // a 32-bit immediate, sign extended (only MOV r64, imm64 differs).
     uint64_t fetch_imm(int size);
@@ -306,6 +356,9 @@ private:
     std::vector<uint64_t> history_;
     size_t history_pos_ = 0;
     size_t history_filled_ = 0;
+    // Whether any of the per-instruction diagnostics is on.  See step(): all of
+    // them together are one branch when they are off, which is always.
+    bool watching_ = false;
     uint64_t profile_every_ = 0;
     uint64_t profile_countdown_ = ~0ull;
     std::vector<uint64_t> profile_samples_;

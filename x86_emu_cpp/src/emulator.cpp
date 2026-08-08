@@ -110,6 +110,13 @@ uint64_t Emulator::add_hook(std::string name, int stdcall_bytes,
     uint64_t addr = hook_base_ + hooks_.size() * kHookStride;
     hooks_.push_back(Hook{name, stdcall_bytes, std::move(fn)});
     hook_by_name_[hooks_.back().name] = addr;
+    // The interpreter checks this range before asking whether an address is a
+    // hook, so it has to grow with the table - hooks are added while the guest
+    // runs, when an import is resolved for the first time.
+    if (cpu_) {
+        cpu_->hook_low = hook_base_;
+        cpu_->hook_high = hook_base_ + hooks_.size() * kHookStride - 1;
+    }
     return addr;
 }
 
@@ -1347,6 +1354,27 @@ void Emulator::setup_linux_stack(const std::vector<std::string>& args) {
 }
 
 void Emulator::load(const std::string& path, const std::vector<std::string>& args) {
+    // Inside the sysroot first, if there is one.
+    //
+    // A sysroot means "this directory is the filesystem", and a program is part
+    // of the filesystem.  Opening it as a host path instead found *this
+    // machine's* /usr/bin/gcc when the guest asked for the Alpine one, and the
+    // failure surfaced two steps later as a missing ld-linux - because the
+    // program had been read from one world and its interpreter looked up in the
+    // other.
+    //
+    // The host path still works, and has to: a front end that hands over
+    // `sysroot/opt/thing/prog` is naming a file that exists, and a guest that
+    // said `/opt/thing/prog` would mean the same one.
+    std::string inside = FileTable::host_path(path);
+    if (inside != path) {
+        std::FILE* f = std::fopen(inside.c_str(), "rb");
+        if (f) {
+            std::fclose(f);
+            load_bytes(read_file(inside), args);
+            return;
+        }
+    }
     load_bytes(read_file(path), args);
 }
 
@@ -1474,6 +1502,10 @@ void Emulator::load_bytes(const std::vector<uint8_t>& file, const std::vector<st
     if (opt_.imports_only) return;
 
     cpu_->on_hook_call = [this](uint64_t addr) { return dispatch_hook(addr); };
+    // The hooks registered before the processor existed are in the table
+    // already; add_hook keeps the range current from here on.
+    cpu_->hook_low = hook_base_;
+    cpu_->hook_high = hook_base_ + hooks_.size() * kHookStride - 1;
     install_syscall_handlers();
 
     if (os_kind == Os::Windows)
@@ -1536,7 +1568,11 @@ int Emulator::run() {
 Emulator::SliceStatus Emulator::run_slice(uint64_t quantum) {
     if (cpu_->halted) return SliceStatus::Exited;
 
-    if (save_state_due()) return SliceStatus::Exited;
+    // The empty test before the call: this is the interpreter's inner loop,
+    // and a function call per instruction to look at a std::string that is
+    // almost always empty showed up in the profile at 3.4%.
+    if (!opt_.save_state_path.empty() && save_state_due())
+        return SliceStatus::Exited;
 
     // Wake anything whose wait is satisfied, and choose who runs this slice.
     size_t next = pick_runnable();
@@ -1557,7 +1593,8 @@ Emulator::SliceStatus Emulator::run_slice(uint64_t quantum) {
         }
         if (opt_.max_instructions && cpu_->instructions_executed >= opt_.max_instructions)
             throw CpuError(cpu_->rip, "instruction limit reached (possible infinite loop)");
-        if (save_state_due()) return SliceStatus::Exited;
+        if (!opt_.save_state_path.empty() && save_state_due())
+            return SliceStatus::Exited;
     }
     return cpu_->halted ? SliceStatus::Exited : SliceStatus::Ran;
 }
@@ -1733,6 +1770,9 @@ std::unique_ptr<Emulator> Emulator::fork_clone() {
     child->install_libc_hooks();
     Emulator* raw = child.get();
     child->cpu_->on_hook_call = [raw](uint64_t addr) { return raw->dispatch_hook(addr); };
+    child->cpu_->hook_low = child->hook_base_;
+    child->cpu_->hook_high =
+        child->hook_base_ + child->hooks_.size() * kHookStride - 1;
     child->install_syscall_handlers();
 
     // fork() keeps only the calling thread.
