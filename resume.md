@@ -215,6 +215,39 @@ this project spent a day explaining. `EMU=` still overrides.
    paired rounds has the cursor at or below its partner, but one pair is dead
    level, so treat three per cent as the size of it and not four.
 
+   **What the session build actually executes**, from `X86EMU_OPCOUNT=1`
+   (`tools/wslcudaopcount.sh`) - a counter, not a sampler, so this is every
+   instruction and not an estimate:
+
+   | | | |
+   | --- | --- | --- |
+   | 89 | MOV r/m, r | 20.3 % |
+   | 31 | XOR r/m, r | 11.9 % |
+   | 8B | MOV r, r/m | 7.0 % |
+   | 21 | AND r/m, r | 5.5 % |
+   | C1 | shift by imm8 | 4.6 % |
+   | C6 | MOV r/m8, imm8 | 4.2 % |
+   | 39 | CMP | 3.4 % |
+   | C3 / E8 | RET / CALL | 3.2 % each |
+   | 0F B6 | MOVZX r, r/m8 | 2.1 % |
+   | 09 | OR | 1.8 % |
+
+   There is **almost no SSE in it**. Everyone involved, this author included,
+   has been describing the 83 % as ONNX Runtime's arithmetic; it is not.
+   MOV, XOR, AND, shift, MOVZX, OR, byte at a time, is a varint decoder - the
+   session build is ONNX Runtime *parsing the model*, and the matrix arithmetic
+   people picture is the five seconds at the end that already runs on the host.
+
+   That changes what is worth trying. The operand helpers are already tight
+   (`decode_modrm` returns early for mod == 3, `even_parity` is four branchless
+   operations, and the dispatch is a `switch` the compiler turns into a jump
+   table), so there is no obvious constant left to shave off instructions this
+   simple - which is consistent with the prefix-switch and census experiments
+   having bought nothing. **The lever that works on a parse is not to parse
+   faster but to parse once**, and that already exists: a saved session skips
+   the whole 212 seconds and comes back in about 13. Anyone reaching for the
+   interpreter here should say first why the snapshot is not the answer.
+
    Two things worth saying about those numbers. The 2.6x that the same sync was
    worth on `gcc_emu_cpp` did **not** arrive here - eight per cent did. That is
    the profile talking: 83 % of these instructions are ONNX Runtime's SSE

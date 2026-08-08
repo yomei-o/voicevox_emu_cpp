@@ -643,6 +643,7 @@ void Cpu::do_string_op(uint8_t opcode, int size) {
 void Cpu::execute_0f() {
     uint64_t start = rip - 1;
     uint8_t op = fetch8();
+    if (!opcount_.empty()) ++opcount_[256 + op];
 
     // SSE shares this opcode space, distinguished by a mandatory prefix; it
     // returns false for anything that is a general-purpose instruction.
@@ -1000,6 +1001,46 @@ std::string Cpu::profile_report() const {
     return out;
 }
 
+std::string Cpu::opcount_report() const {
+    if (opcount_.empty()) return {};
+    uint64_t total = 0;
+    for (uint64_t n : opcount_) total += n;
+    if (!total) return {};
+
+    std::vector<std::pair<uint64_t, size_t>> sorted;
+    sorted.reserve(opcount_.size());
+    for (size_t i = 0; i < opcount_.size(); ++i)
+        if (opcount_[i]) sorted.push_back({opcount_[i], i});
+    std::sort(sorted.begin(), sorted.end(), std::greater<>());
+
+    std::string out = "[opcount] " + std::to_string(total) + " instructions, " +
+                      std::to_string(sorted.size()) + " distinct opcodes\n";
+    char line[128];
+    // The top thirty and then a line for the rest: past that the tail is long
+    // and every entry in it is under a percent, so printing it would bury the
+    // part worth reading.
+    size_t shown = 0;
+    uint64_t rest = 0;
+    for (const auto& [n, i] : sorted) {
+        if (shown++ < 30) {
+            std::snprintf(line, sizeof line, "[opcount] %6.2f %%  %12llu  %s%02X\n",
+                          100.0 * static_cast<double>(n) / static_cast<double>(total),
+                          static_cast<unsigned long long>(n),
+                          i >= 256 ? "0F " : "", static_cast<unsigned>(i & 0xFF));
+            out += line;
+        } else {
+            rest += n;
+        }
+    }
+    if (rest) {
+        std::snprintf(line, sizeof line, "[opcount] %6.2f %%  %12llu  (%zu more)\n",
+                      100.0 * static_cast<double>(rest) / static_cast<double>(total),
+                      static_cast<unsigned long long>(rest), sorted.size() - 30);
+        out += line;
+    }
+    return out;
+}
+
 void Cpu::unsupported(const char* what, uint8_t opcode, uint64_t start_rip) {
     // Show a few raw bytes so an unknown encoding can be looked up quickly.
     char bytes[64] = {};
@@ -1121,6 +1162,13 @@ void Cpu::step() {
 
     uint8_t op = fetch8();
     ++instructions_executed;
+    // Behind `watching_` like everything else here, so an ordinary run does not
+    // pay for it.  0F is not counted: it is an escape, not an instruction, and
+    // the two-byte handler counts the byte after it - which is the byte that
+    // says what the instruction is.  Counted here as well it appeared as the
+    // fourth commonest "instruction" in the run and inflated the total by its
+    // own six per cent.
+    if (!opcount_.empty() && op != 0x0F) ++opcount_[op];
 
     // 0x00-0x3F: the eight ALU operations, six encodings each.  (0x0F is the
     // escape byte and the x/7 slots are BCD instructions, both excluded.)

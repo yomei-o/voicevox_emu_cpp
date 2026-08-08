@@ -163,6 +163,21 @@ public:
     }
     bool profiling() const { return profile_every_ != 0; }
     std::string profile_report() const;
+
+    // Which instructions, rather than which module.
+    //
+    // The sampling profiler says 83 % of a voicevox run is inside ONNX Runtime
+    // and has said so through three rounds of changes, which is true and does
+    // not name a single thing to make faster.  This counts opcodes, so the
+    // question "what does that 83 % actually execute" has an answer that is not
+    // a guess.  Every opcode is counted, not sampled - it is one increment on a
+    // line that is already hot in cache, and it only happens when asked.
+    void enable_opcount() {
+        opcount_.assign(kOpcountSlots, 0);
+        watching_ = true;
+    }
+    bool counting_opcodes() const { return !opcount_.empty(); }
+    std::string opcount_report() const;
     // The addresses, oldest first.
     std::vector<uint64_t> history() const;
 
@@ -362,6 +377,10 @@ private:
     uint64_t profile_every_ = 0;
     uint64_t profile_countdown_ = ~0ull;
     std::vector<uint64_t> profile_samples_;
+    // 0x000-0x0FF one-byte opcodes, 0x100-0x1FF the 0F escape.  Empty unless
+    // enable_opcount() was called, which is what `counting_opcodes()` asks.
+    static constexpr size_t kOpcountSlots = 512;
+    std::vector<uint64_t> opcount_;
 
     Memory& mem_;
     Mode mode_;
